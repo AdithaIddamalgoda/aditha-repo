@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the daily market report
+
+[Timer]
+# 06:30 UTC. Adjust to taste (e.g. 12:30 UTC ~ 08:30 New York pre-market).
+OnCalendar=*-*-* 06:30:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

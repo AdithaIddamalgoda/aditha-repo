@@ -1,0 +1,14 @@
+[Unit]
+Description=Trading agents watchdog (heartbeat -> halt + flatten)
+After=network-online.target
+
+[Service]
+User=trader
+WorkingDirectory=/home/trader/aditha-repo/trading-agents
+EnvironmentFile=/home/trader/aditha-repo/trading-agents/.env
+ExecStart=/home/trader/aditha-repo/trading-agents/.venv/bin/python -m src.watchdog
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

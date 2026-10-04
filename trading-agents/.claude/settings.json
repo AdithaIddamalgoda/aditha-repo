@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Edit(./config/limits.yaml)",
+      "Edit(./src/risk_gate.py)",
+      "Bash(rm -rf:*)",
+      "Bash(curl:*api.binance*)",
+      "Bash(python -m src.watchdog:*)"
+    ],
+    "allow": [
+      "Read(./data/**)",
+      "Bash(sqlite3 data/audit.db:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(python -m src.report:*)"
+    ]
+  }
+}

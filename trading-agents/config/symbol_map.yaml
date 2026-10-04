@@ -1,0 +1,15 @@
+# Canonical asset -> venue symbols. The signal agent outputs the canonical key (e.g. "BTC");
+# the trader chooses a venue; the risk gate re-checks the symbol against limits.yaml allowlists.
+assets:
+  BTC:  {binance_spot: BTC/USDT,  binance_futures: "BTC/USDT:USDT",  moomoo: null}
+  ETH:  {binance_spot: ETH/USDT,  binance_futures: "ETH/USDT:USDT",  moomoo: null}
+  SOL:  {binance_spot: SOL/USDT,  binance_futures: "SOL/USDT:USDT",  moomoo: null}
+  DOGE: {binance_spot: DOGE/USDT, binance_futures: "DOGE/USDT:USDT", moomoo: null}
+  TSLA: {binance_spot: null, binance_futures: null, moomoo: US.TSLA}
+  NVDA: {binance_spot: null, binance_futures: null, moomoo: US.NVDA}
+  AAPL: {binance_spot: null, binance_futures: null, moomoo: US.AAPL}
+  SPY:  {binance_spot: null, binance_futures: null, moomoo: US.SPY}
+  QQQ:  {binance_spot: null, binance_futures: null, moomoo: US.QQQ}
+  COIN: {binance_spot: null, binance_futures: null, moomoo: US.COIN}
+  MSTR: {binance_spot: null, binance_futures: null, moomoo: US.MSTR}
+  DJT:  {binance_spot: null, binance_futures: null, moomoo: US.DJT}

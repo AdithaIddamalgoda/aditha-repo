@@ -1,0 +1,39 @@
+# X accounts the signal agent watches. Handles only (no @). Verify each handle yourself.
+accounts:
+  - handle: realDonaldTrump
+    weight: 1.0
+    themes: [tariffs, crypto, oil, rates, specific-companies]
+  - handle: elonmusk
+    weight: 1.0
+    themes: [dogecoin, tesla, crypto, xai, spacex]
+  - handle: WhiteHouse
+    weight: 0.6
+    themes: [policy, tariffs]
+  - handle: federalreserve
+    weight: 0.8
+    themes: [rates]
+  - handle: SECGov
+    weight: 0.6
+    themes: [crypto, etf]
+
+# Cheap pre-filter: a post must hit at least one keyword (case-insensitive) to reach the LLM.
+# Empty list = pass everything from the watched accounts.
+keywords:
+  - bitcoin
+  - btc
+  - crypto
+  - doge
+  - dogecoin
+  - ethereum
+  - tariff
+  - tesla
+  - tsla
+  - nvidia
+  - rate
+  - ban
+  - sanction
+  - etf
+  - oil
+  - strategic reserve
+  - buy
+  - sell

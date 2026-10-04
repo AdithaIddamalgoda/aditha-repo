@@ -1,0 +1,34 @@
+# Hard limits enforced by src/risk_gate.py. The LLM can never change these at runtime.
+# Start conservative; loosen only after reviewing data/audit.db.
+
+global:
+  max_daily_loss_pct: 3.0        # of start-of-day equity; breach => halt + flatten
+  max_trades_per_day: 12
+  max_open_positions: 3
+  signal_ttl_seconds: 90         # reject signals older than this at order time
+  min_confidence: 0.70
+  cooldown_seconds_per_symbol: 300
+
+venues:
+  binance_spot:
+    enabled: true
+    max_notional_pct_equity: 2.0
+    symbol_allowlist: [BTC/USDT, ETH/USDT, SOL/USDT, DOGE/USDT]
+    allow_short: false
+  binance_futures:
+    enabled: true
+    max_notional_pct_equity: 2.0   # margin-notional per trade, before leverage
+    max_leverage: 3
+    margin_mode: isolated
+    symbol_allowlist: [BTC/USDT:USDT, ETH/USDT:USDT, SOL/USDT:USDT, DOGE/USDT:USDT]
+    allow_short: true
+    require_stop_loss: true
+    max_stop_loss_pct: 4.0
+  moomoo:
+    enabled: true
+    max_notional_pct_equity: 2.0
+    symbol_allowlist: [US.TSLA, US.NVDA, US.AAPL, US.SPY, US.QQQ, US.DJT, US.COIN, US.MSTR]
+    allow_short: false             # long-only, no margin/options
+    require_stop_loss: true
+    max_stop_loss_pct: 5.0
+    regular_hours_only: true

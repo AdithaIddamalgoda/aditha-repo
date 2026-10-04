@@ -2,3 +2,9 @@ node_modules/
 *.wav
 __pycache__/
 animation/rigged/
+
+# trading-agents
+trading-agents/.env
+trading-agents/data/
+trading-agents/.venv/
+.pytest_cache/

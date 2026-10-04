@@ -1,0 +1,16 @@
+[Unit]
+Description=Moomoo OpenD gateway (localhost only)
+After=network-online.target
+
+[Service]
+User=trader
+# Download OpenD for Linux from https://www.moomoo.com/download/OpenAPI and unpack here.
+# In OpenD.xml set: ip=127.0.0.1, api_port=11111, login_account, login_pwd_md5; first login needs
+# interactive SMS/2FA (run once in a terminal with `./OpenD` before enabling this unit).
+WorkingDirectory=/home/trader/opend
+ExecStart=/home/trader/opend/OpenD
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

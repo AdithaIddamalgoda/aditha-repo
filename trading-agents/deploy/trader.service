@@ -1,0 +1,17 @@
+[Unit]
+Description=Trading agents orchestrator
+After=network-online.target opend.service
+Wants=network-online.target
+
+[Service]
+User=trader
+WorkingDirectory=/home/trader/aditha-repo/trading-agents
+EnvironmentFile=/home/trader/aditha-repo/trading-agents/.env
+ExecStart=/home/trader/aditha-repo/trading-agents/.venv/bin/python -m src.orchestrator
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
