@@ -15,11 +15,13 @@ Deliverable: [`six_to_picnic.mp4`](six_to_picnic.mp4) (H.264 + AAC, ~8.5 MB).
 
 ## Pipeline (Playwright + ffmpeg frame render)
 
-- `animation/scene.html` draws any frame as a pure function of time on a 1920×1080 canvas. Open it with `?t=7.5` in a browser to inspect a moment.
+- `animation/sprites/` holds the generated character art (19 PNGs: batter, bowler, marshal, footballer, car, wheel, ball), made to the spec in `animation/CHARACTER_BRIEF.md`.
+- `animation/rig_sprites.py` keys the white backgrounds with a border flood fill (so the white cricket kit survives), crops, finds feet/pole-top/ball anchors, erases the baked-in ball for the bowler's post-release frames, and writes `animation/rigged/` plus a manifest. Hand-measured anchors (hands, bat, airbox, wheel arches) live in `animation/anchors.json`.
+- `animation/scene.html` draws any frame as a pure function of time on a 1920×1080 canvas. Characters are the rigged sprites, switched pose-to-pose with short dissolves; the ball launch point, the airbox landing, the flag attachment and the blanket's hand corners are all read from the sprite anchors. Open it with `?t=7.5` in a browser (file access flag needed) to inspect a moment.
 - `animation/render.js` drives headless Chromium through 900 timestamps and pipes each PNG straight into one `ffmpeg` libx264 encode. No frame sequence or lossless master is written anywhere.
 - `animation/audio.py` synthesizes the whole soundtrack with numpy: crowd, bat crack, slide-whistle ball arc, engine with gear shifts and doppler, flag and blanket flutter, birds, breeze, ukulele-style plucks and the sparkle at the end.
 - `animation/build.sh` runs the three steps and prints the ffprobe summary.
 
-Requirements: Node 22 with `playwright` (Chromium installed), `ffmpeg` with libx264/aac, Python 3 with `numpy`.
+Requirements: Node 22 with `playwright` (Chromium installed), `ffmpeg` with libx264/aac, Python 3 with `numpy` and `Pillow`.
 
 Characters are deliberate caricatures (navy car with red/yellow accents, tall blond number 9 in sky blue); no real logos or likenesses are used.

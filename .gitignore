@@ -1,3 +1,4 @@
 node_modules/
 *.wav
 __pycache__/
+animation/rigged/

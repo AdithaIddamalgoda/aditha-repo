@@ -2,6 +2,7 @@
 <html><head><meta charset="utf-8"><title>Six to Picnic</title>
 <style>html,body{margin:0;background:#000;overflow:hidden}canvas{display:block}</style></head>
 <body><canvas id="c" width="1920" height="1080"></canvas>
+<script src="rigged/manifest.js"></script>
 <script>
 'use strict';
 // ============================================================================
@@ -57,38 +58,49 @@ function face(x,y,r,o){o=o||{};const ex=r*0.34,ey=-r*0.02+(o.ly||0)*r*0.08,lx=(o
   else if(m==='grit'){rrect(x+lx-r*0.2,my-r*0.07,r*0.4,r*0.14,r*0.05,'#fff',OUT,3);line([[x+lx,my-r*0.07],[x+lx,my+r*0.07]],OUT,2);}
 }
 
+// ------------------------------------------------------------------ sprites
+const SPR={img:{},man:window.SPRITE_MANIFEST||{}};
+const F_BAT=300/891,F_BOW=300/881,F_MAR=320/965,F_CAR=560/944,F_HAL=600/917;
+function loadSprites(){const ps=[];for(const c in SPR.man)for(const p in SPR.man[c]){const im=new Image();const k=c+'/'+p;SPR.img[k]=im;ps.push(new Promise(r=>{im.onload=r;im.onerror=()=>{console.error('missing sprite '+k);r();};}));im.src='rigged/'+k+'.png';}return Promise.all(ps);}
+function sprMeta(key){const i=key.indexOf('/');return SPR.man[key.slice(0,i)][key.slice(i+1)];}
+function drawSprite(key,x,y,f,o){o=o||{};const m=sprMeta(key),im=SPR.img[key];if(!m||!im||!im.width)return;const w=m.w*f,h=m.h*f;const px=(m.anchors.pivot||m.anchors.feet)[0]*w;
+  ctx.save();ctx.translate(x,y);if(o.rot)ctx.rotate(o.rot);if(o.sq&&o.sq!==1)ctx.scale(1/Math.sqrt(o.sq),o.sq);if(o.alpha!==undefined)ctx.globalAlpha*=o.alpha;if(o.mirror)ctx.scale(-1,1);
+  ctx.drawImage(im,-px,-h,w,h);ctx.restore();}
+function sprAnchor(key,name,x,y,f,o){o=o||{};const m=sprMeta(key);const a=m.anchors[name];const w=m.w*f,h=m.h*f;const px=(m.anchors.pivot||m.anchors.feet)[0]*w;
+  let lx=a[0]*w-px,ly=(a[1]-1)*h;if(o.mirror)lx=-lx;if(o.sq&&o.sq!==1){lx/=Math.sqrt(o.sq);ly*=o.sq;}
+  if(o.rot){const c=Math.cos(o.rot),s=Math.sin(o.rot);const nx=lx*c-ly*s,ny=lx*s+ly*c;lx=nx;ly=ny;}return [x+lx,y+ly];}
+function poseMix(t,keys,fade){let i=0;while(i<keys.length-1&&t>=keys[i+1][0])i++;const out=[[keys[i][1],1]];
+  if(i>0){const dt=t-keys[i][0];if(dt<fade){out[0][1]=dt/fade;out.unshift([keys[i-1][1],1-dt/fade]);}}return out;}
+
 // ============================================================================
 //  WORLD 1: stadium + race track (one continuous side-view world)
 // ============================================================================
-const CAR0=3300, AIRBOX=[-55,-182];
+const CAR0=3300;
 function carX(t){if(t<5.35)return CAR0;const u=t-5.35,V=2300,K=0.75;return CAR0+V*(u-K*(1-Math.exp(-u/K)));}
 function carV(t){if(t<5.35)return 0;return 2300*(1-Math.exp(-(t-5.35)/0.75));}
 const XF=carX(8.6);           // finish line world x
 const MX=XF+180;              // marshal world x
 function carSquash(t){if(t<5.0)return 1;const u=t-5.0;return 1-0.2*Math.exp(-u*6)*Math.sin(TAU*u*2.3);}
 function carTilt(t){const u=t-5.35;if(u<0)return 0;return -0.14*Math.sin(Math.PI*sat(u/0.5))*Math.exp(-u*1.5);}
-const HIT=[45,-100],T_HIT=1.3,T_LAND=5.0,GRAV=900;
-const LX=CAR0+AIRBOX[0],LY=AIRBOX[1];
-const TF=T_LAND-T_HIT,VX=(LX-HIT[0])/TF,VY=(LY-HIT[1]-0.5*GRAV*TF*TF)/TF;
+const T_HIT=1.3,T_LAND=5.0,GRAV=900,TF=T_LAND-T_HIT;
+let HIT=[45,-100],LX=0,LY=0,VX=0,VY=0,B0=[330,-230];
+function initRig(){HIT=sprAnchor('batter/contact','bat',0,0,F_BAT);B0=sprAnchor('bowler/release','ball',bowlerX(0.8),bowlerBob(0.8),F_BOW,{mirror:true});const a=carLocalAnchor('airbox');LX=CAR0+a[0];LY=a[1];VX=(LX-HIT[0])/TF;VY=(LY-HIT[1]-0.5*GRAV*TF*TF)/TF;}
 function bowlerX(t){return kf(t,[[0,980],[0.8,330,linear],[1.3,250,easeOut]]);}
-function bowlerHand(t){ // delivery hand position before release
-  const bx=bowlerX(t);const ph=ramp(t,0.45,0.8);const a=lerp(Math.PI*0.5,-Math.PI*0.85,ph);
-  const sx=bx+10,sy=-205;return [sx+Math.cos(a)*70,sy+Math.sin(a)*70];}
 function ballPos(t){
-  if(t<0.8)return bowlerHand(t);
-  if(t<1.07){const u=ramp(t,0.8,1.07);return [lerp(300,165,u),lerp(-230,-14,u*u)];}
+  if(t<0.8)return B0;
+  if(t<1.07){const u=ramp(t,0.8,1.07);return [lerp(B0[0],165,u),lerp(B0[1],-14,u*u)];}
   if(t<T_HIT){const u=ramp(t,1.07,T_HIT);return [lerp(165,HIT[0],u),lerp(-14,HIT[1],easeOut(u))];}
   if(t<T_LAND){const u=t-T_HIT;return [HIT[0]+VX*u,HIT[1]+VY*u+0.5*GRAV*u*u];}
-  const u=t-T_LAND;const settle=-Math.abs(Math.sin(u*TAU*1.6))*46*Math.exp(-u*5);
-  return [carX(t)+AIRBOX[0],AIRBOX[1]*carSquash(t)+settle-6];
+  const u=t-T_LAND;const settle=-Math.abs(Math.sin(u*TAU*1.6))*46*Math.exp(-u*5);const ab=carAirboxWorld(t);
+  return [ab[0],ab[1]+settle-6];
 }
 function ballSpin(t){if(t<T_HIT)return t*20;if(t<T_LAND)return (t-T_HIT)*26;return (T_LAND-T_HIT)*26;}
 function flagTheta(t){ // pole tilt from vertical, + = toward +x
   const wave=0.52*Math.sin(TAU*1.45*(t-7.8));const env=smooth(ramp(t,7.5,8.0))*(1-smooth(ramp(t,9.25,9.7)));
   return 0.22+wave*env+0.1*smooth(ramp(t,9.25,9.7));}
-function flagQuadWorld(t){const th=flagTheta(t);const hx=MX-34,hy=-410;const dir=[Math.sin(th),-Math.cos(th)],per=[Math.cos(th),Math.sin(th)];
-  const L=310,top=[hx+dir[0]*L,hy+dir[1]*L];const TL=top,BL=[top[0]-dir[0]*185,top[1]-dir[1]*185];
-  const FL=320;return [TL,[TL[0]+per[0]*FL,TL[1]+per[1]*FL],[BL[0]+per[0]*FL,BL[1]+per[1]*FL],BL,[hx,hy]];}
+function flagQuadWorld(t){let P=[0,0];for(const [p,a] of poseMix(t,MARSHAL_POSES,0.1)){const q=sprAnchor('marshal/'+p,'top',MX,-150-marshalHop(t),F_MAR,{rot:marshalRot(t)});P[0]+=q[0]*a;P[1]+=q[1]*a;}
+  const ph=flagTheta(t)-0.22;const dn=[-Math.sin(ph),Math.cos(ph)],rt=[Math.cos(ph),Math.sin(ph)];const FH=130,FL=260;
+  const TL=P,BL=[P[0]+dn[0]*FH,P[1]+dn[1]*FH];return [TL,[TL[0]+rt[0]*FL,TL[1]+rt[1]*FL],[BL[0]+rt[0]*FL,BL[1]+rt[1]*FL],BL,P];}
 function quadCenter(Q){return [(Q[0][0]+Q[1][0]+Q[2][0]+Q[3][0])/4,(Q[0][1]+Q[1][1]+Q[2][1]+Q[3][1])/4];}
 
 function shakeAB(t){let a=0;
@@ -191,83 +203,32 @@ function drawTrack(cam,t){
   // marshal platform
   rrect(MX-80,-150,160,44,8,'#8ea0c8',OUT,5);
 }
-function wheel(x,y,r,rot){circ(x,y,r,'#2a2a30',OUT,5);circ(x,y,r*0.55,'#b8bcc8',OUT,4);ctx.save();ctx.translate(x,y);ctx.rotate(rot);for(let i=0;i<5;i++){ctx.rotate(TAU/5);line([[0,0],[r*0.5,0]],'#6b7080',5);}ctx.restore();circ(x,y,r*0.16,'#e23b3b');}
-function drawCar(t){const x=carX(t),sq=carSquash(t),tilt=carTilt(t);const rot=x/50;
+const R_REAR=50,R_FRONT=46;
+function carBaseY(){const m=sprMeta('car/neutral');return -R_REAR-(m.anchors.rear[1]-1)*m.h*F_CAR;}
+function carLocalAnchor(name){return sprAnchor('car/neutral',name,0,carBaseY(),F_CAR);}
+function carAirboxWorld(t){const x=carX(t),sq=carSquash(t),tilt=carTilt(t);const a=carLocalAnchor('airbox');const lx=a[0],ly=a[1]*sq;const c=Math.cos(tilt),s=Math.sin(tilt);return [x+lx*c-ly*s,lx*s+ly*c];}
+function drawCar(t){const x=carX(t),sq=carSquash(t),tilt=carTilt(t);const rot=x/R_REAR;
   ctx.save();ctx.translate(x,0);ctx.rotate(tilt);ctx.scale(1,sq);
-  ell(10,4,230,12,'rgba(0,0,0,0.2)');
-  // rear wing
-  rrect(-205,-150,80,18,6,'#1b2a5e',OUT,4);rrect(-200,-150,10,74,3,'#e23b3b',OUT,4);rrect(-205,-125,70,10,4,'#f3c13a',OUT,3);
-  // body
-  poly([[-180,-36],[-160,-108],[-60,-118],[30,-98],[130,-60],[215,-46],[220,-24],[160,-20],[-170,-20]],'#1b2a5e',OUT,5);
-  poly([[-130,-60],[50,-60],[85,-44],[-130,-44]],'#f3c13a');poly([[-130,-80],[0,-80],[48,-62],[-130,-62]],'#e23b3b');
-  // nose + front wing
-  poly([[130,-62],[310,-44],[312,-30],[160,-26]],'#e23b3b',OUT,5);rrect(230,-34,110,14,6,'#1b2a5e',OUT,4);rrect(330,-58,10,40,3,'#f3c13a',OUT,4);
-  // airbox / engine cover + halo
-  poly([[-120,-118],[-88,-182],[-22,-186],[-6,-118]],'#1b2a5e',OUT,5);poly([[-98,-150],[-84,-176],[-30,-178],[-26,-150]],'#e23b3b');
-  line([[-5,-120],[-5,-150],[-30,-150]],'#2b2640',8);
-  // driver helmet (big + cute)
-  circ(-50,-128,30,'#e23b3b',OUT,5);rrect(-72,-138,46,14,7,'#2b2640');circ(-60,-134,3,'#fff');circ(-44,-134,3,'#fff');rrect(-80,-128,6,20,3,'#f3c13a');
-  ell(-55,-184,28,10,'#15192e',OUT,4);  // airbox mouth (ball lands here)
-  wheel(-130,-50,54,rot);wheel(185,-50,48,rot);
+  ell(40,4,280,12,'rgba(0,0,0,0.2)');
+  drawSprite('car/neutral',0,carBaseY(),F_CAR);
+  const im=SPR.img['wheel/neutral'];
+  for(const [name,R] of [['rear',R_REAR],['front',R_FRONT]]){const p=carLocalAnchor(name);ctx.save();ctx.translate(p[0],p[1]);ctx.rotate(rot*R_REAR/R);ctx.drawImage(im,-R,-R,2*R,2*R);ctx.restore();}
   ctx.restore();
-  // tyre smoke during rev, exhaust puffs at launch
   if(t>5.1&&t<5.6){const u=ramp(t,5.1,5.6);for(let i=0;i<4;i++){const a=(1-u)*0.6;ctx.globalAlpha=a;circ(x-150-i*40-u*120,-20-i*18-u*60,30+u*40+i*8,'#eef0f6');}ctx.globalAlpha=1;}
-  if(t>5.3&&t<6.2){for(let i=0;i<5;i++){const u=ramp(t,5.3+i*0.12,5.3+i*0.12+0.55);if(u<=0||u>=1)continue;ctx.globalAlpha=(1-u)*0.7;circ(x-230-u*300,-70-u*90-i*10,18+u*50,'#cfd3dd');}ctx.globalAlpha=1;}
+  if(t>5.3&&t<6.2){for(let i=0;i<5;i++){const u=ramp(t,5.3+i*0.12,5.3+i*0.12+0.55);if(u<=0||u>=1)continue;ctx.globalAlpha=(1-u)*0.7;circ(x-250-u*300,-70-u*90-i*10,18+u*50,'#cfd3dd');}ctx.globalAlpha=1;}
 }
-function drawBatter(t){const x=0,F=0;const bob=Math.sin(t*6)*3*(t<1.0?1:0);
-  const jump=t>2.2?Math.abs(Math.sin((t-2.2)*7))*40*smooth(ramp(t,2.2,2.5)):0;
-  ctx.save();ctx.translate(x,-jump);
-  // bat angle keyframes
-  const a=kf(t,[[0,1.95],[1.0,1.9],[1.2,-2.45],[1.32,0.55,easeIn],[1.75,-1.05],[2.2,-1.1],[2.5,-1.9]]);
-  const hand=[28+bob*0.3,-150+bob];
-  // legs with pads
-  limb([[-16,-125],[-26,-60],[-30,F]],'#f0efe9',30);limb([[18,-125],[30,-60],[36,F]],'#f0efe9',30);
-  ell(-30,F,24,10,'#fff',OUT,4);ell(36,F,24,10,'#fff',OUT,4);
-  rrect(-48,-218,96,105,22,'#ffffff',OUT,5);rrect(-30,-180,60,40,10,'#dbe4ff');
-  // back arm
-  limb([[-20,-205],ik([-20,-205],hand,55,55,1),hand],'#ffd9b8',22);
-  // bat
-  ctx.save();ctx.translate(hand[0],hand[1]);ctx.rotate(a);rrect(-9,-6,70,18,8,'#5a4634',OUT,4);rrect(55,-16,105,34,10,'#e9c58e',OUT,5);ctx.restore();
-  // front arm
-  limb([[28,-205],ik([28,-205],hand,55,55,-1),hand],'#ffd9b8',22);circ(hand[0],hand[1],15,'#ffd9b8',OUT,4);
-  // head + helmet
-  const hy=-285+bob;circ(0,hy,66,'#ffd9b8',OUT,5);
-  ctx.beginPath();ctx.arc(0,hy-4,70,Math.PI,TAU);ctx.lineTo(70,hy+8);ctx.lineTo(-70,hy+8);ctx.closePath();ctx.fillStyle='#2f55a4';ctx.fill();ctx.lineWidth=5*LWK;ctx.strokeStyle=OUT;ctx.stroke();
-  rrect(10,hy-2,80,16,6,'#2f55a4',OUT,4);line([[66,hy+16],[66,hy+40]],'#2f55a4',8);line([[66,hy+40],[86,hy+54]],'#2f55a4',8);line([[76,hy+22],[86,hy+54]],'#2f55a4',8);
-  const hit=t>=T_HIT;face(0,hy+6,62,{eyes:hit&&t<2.2?'wide':(t>2.2?'happy':'open'),mouth:t<1.2?'smile':(t<1.75?'grit':'grin'),lx:t<1.2?1:0.5});
-  ctx.restore();
-}
-function drawBowler(t){const x=bowlerX(t);const run=t<0.85?1:smooth(1-ramp(t,0.85,1.3));const ph=t*14;
-  const duck=smooth(ramp(t,1.35,1.6))*(1-smooth(ramp(t,2.0,2.6)));
-  ctx.save();ctx.translate(x,0);ctx.scale(-1,1);ctx.translate(0,duck*60);ctx.scale(1,1-duck*0.25);
-  const bob=Math.abs(Math.sin(ph))*10*run;
-  const k1=[18+Math.sin(ph)*35*run,-60],f1=[30+Math.sin(ph)*60*run,-Math.max(0,Math.sin(ph))*40*run],k2=[18-Math.sin(ph)*35*run,-60],f2=[30-Math.sin(ph)*60*run,-Math.max(0,-Math.sin(ph))*40*run];
-  limb([[-10,-120+bob],k1,f1],'#f0efe9',28);ell(f1[0],f1[1],22,9,'#fff',OUT,4);
-  rrect(-45,-212+bob,90,100,22,'#ffffff',OUT,5);
-  limb([[-10,-120+bob],k2,f2],'#f0efe9',28);ell(f2[0],f2[1],22,9,'#fff',OUT,4);
-  // bowling arm (mirrored world: hand pos computed in world and mirrored)
-  const bh=bowlerHand(t);const hl=[-(bh[0]-x),bh[1]+bob];
-  const sh=[-10,-205+bob];const el=ik(sh,hl,70,70,1);limb([sh,el,hl],'#ffd9b8',22);circ(hl[0],hl[1],14,'#ffd9b8',OUT,4);
-  if(t<0.8)circ(hl[0],hl[1],14,'#d8372f',OUT,4);
-  const oh=[40+Math.sin(ph+Math.PI)*30*run,-150+bob];limb([[22,-205+bob],ik([22,-205+bob],oh,55,55,-1),oh],'#ffd9b8',22);
-  const hy=-280+bob;circ(0,hy,60,'#ffd9b8',OUT,5);
-  ctx.beginPath();ctx.arc(0,hy-6,63,Math.PI*1.02,TAU*0.99);ctx.closePath();ctx.fillStyle='#4a3326';ctx.fill();ctx.lineWidth=4*LWK;ctx.strokeStyle=OUT;ctx.stroke();
-  face(0,hy+4,56,{eyes:t>1.3?'wide':'open',mouth:t>1.3?'o':'flat',lx:-0.6});
-  ctx.restore();
-}
-function drawMarshal(t){ctx.save();ctx.translate(MX,-150);const hop=t>8.5&&t<9.3?Math.abs(Math.sin((t-8.5)*12))*14:0;ctx.translate(0,-hop);
-  limb([[-14,-105],[-18,-50],[-22,0]],'#2b2f4a',24);limb([[14,-105],[20,-50],[26,0]],'#2b2f4a',24);ell(-22,0,20,8,'#333',OUT,3);ell(26,0,20,8,'#333',OUT,3);
-  rrect(-42,-190,84,92,20,'#ff8a2a',OUT,5);rrect(-42,-180,84,10,4,'#fff2a8');rrect(-42,-150,84,10,4,'#fff2a8');
-  const fq=flagQuadWorld(t);const hand=[fq[4][0]-MX,fq[4][1]+150+hop];const sh=[-20,-180];limb([sh,ik(sh,hand,70,70,1),hand],'#ffd9b8',20);
-  const oh=[40,-110];limb([[22,-180],ik([22,-180],oh,50,50,-1),oh],'#ffd9b8',20);circ(oh[0],oh[1],13,'#ffd9b8',OUT,4);
-  const hy=-250;circ(0,hy,54,'#ffd9b8',OUT,5);ctx.beginPath();ctx.arc(0,hy-6,57,Math.PI,TAU);ctx.closePath();ctx.fillStyle='#fff';ctx.fill();ctx.lineWidth=4*LWK;ctx.strokeStyle=OUT;ctx.stroke();rrect(-60,hy-8,70,14,6,'#fff',OUT,4);
-  face(0,hy+4,50,{eyes:t>8.4?'happy':'open',mouth:'grin',lx:-0.6});
-  circ(hand[0],hand[1],13,'#ffd9b8',OUT,4);
-  ctx.restore();
-}
-function drawBall(x,y,r,spin,squash){ctx.save();ctx.translate(x,y);ctx.scale(1/(squash||1),squash||1);ctx.rotate(spin);circ(0,0,r,'#d8372f',OUT,Math.max(3,r*0.22));
-  ctx.beginPath();ctx.ellipse(0,0,r*0.35,r*0.98,0,0,TAU);ctx.lineWidth=Math.max(2,r*0.13)*LWK;ctx.strokeStyle='#fff';ctx.setLineDash([r*0.18,r*0.14]);ctx.stroke();ctx.setLineDash([]);
-  circ(-r*0.35,-r*0.35,r*0.2,'rgba(255,255,255,0.5)');ctx.restore();}
+const BATTER_POSES=[[0,'neutral'],[1.0,'backlift'],[1.19,'contact'],[1.42,'follow'],[2.2,'celebrate']];
+function drawBatter(t){const jump=t>2.2?Math.abs(Math.sin((t-2.2)*7))*40*smooth(ramp(t,2.2,2.5)):0;const bob=t<1.0?Math.sin(t*6)*2:0;
+  for(const [p,a] of poseMix(t,BATTER_POSES,0.07))drawSprite('batter/'+p,0,-jump+bob,F_BAT,{alpha:a,rot:t<1.0?Math.sin(t*6)*0.01:0});}
+const BOWLER_POSES=[[0,'neutral'],[0.55,'release'],[0.8,'release_noball'],[1.35,'duck']];
+function bowlerBob(t){return t<0.85?-Math.abs(Math.sin(t*14))*10:0;}
+function drawBowler(t){const x=bowlerX(t);
+  for(const [p,a] of poseMix(t,BOWLER_POSES,0.08))drawSprite('bowler/'+p,x,bowlerBob(t),F_BOW,{alpha:a,mirror:p!=='neutral',rot:t<0.85?-0.05:0});}
+const MARSHAL_POSES=[[0,'neutral'],[8.5,'cheer']];
+function marshalRot(t){return 0.25*(flagTheta(t)-0.22);}
+function marshalHop(t){return t>8.5&&t<9.3?Math.abs(Math.sin((t-8.5)*12))*14:0;}
+function drawMarshal(t){for(const [p,a] of poseMix(t,MARSHAL_POSES,0.1))drawSprite('marshal/'+p,MX,-150-marshalHop(t),F_MAR,{alpha:a,rot:marshalRot(t)});}
+function drawBall(x,y,r,spin,squash){const im=SPR.img['ball/neutral'];ctx.save();ctx.translate(x,y);ctx.scale(1/(squash||1),squash||1);ctx.rotate(spin);ctx.drawImage(im,-r,-r,2*r,2*r);ctx.restore();}
 function drawImpact(t){const u=ramp(t,T_HIT,T_HIT+0.2);if(u<=0||u>=1)return;ctx.save();ctx.translate(HIT[0],HIT[1]);const s=lerp(0.4,1.6,easeOut(u));ctx.scale(s,s);ctx.globalAlpha=1-u*u;
   ctx.beginPath();for(let i=0;i<16;i++){const a=i*TAU/16,rr=i%2?45:95;ctx.lineTo(Math.cos(a)*rr,Math.sin(a)*rr);}ctx.closePath();ctx.fillStyle='#fff3a0';ctx.fill();ctx.lineWidth=6;ctx.strokeStyle='#ff9f1c';ctx.stroke();ctx.restore();}
 function drawSpeedLines(t,cam){const v=sat(carV(t)/2300)*(1-smooth(ramp(t,8.3,9.0)));if(v<=0.02)return;ctx.setTransform(1,0,0,1,0,0);const r2=rng(99);ctx.strokeStyle='rgba(255,255,255,0.55)';ctx.lineCap='round';
@@ -298,11 +259,11 @@ function drawCloth(Q,waveFn,cells,sub,outline){const nx=cells[0]*sub,ny=cells[1]
     for(let i=nx-1;i>=0;i--){const p=P[ny*(nx+1)+i];ctx.lineTo(p[0],p[1]);}for(let j=ny-1;j>0;j--){const p=P[j*(nx+1)];ctx.lineTo(p[0],p[1]);}ctx.closePath();ctx.lineWidth=outline;ctx.strokeStyle=OUT;ctx.stroke();}
 }
 // picnic blanket quad (screen space) through its life
-function blanketQuad(t){
-  const held=[[740,372],[1180,372],[1260,772],[660,772]];
+function blanketQuad(t){const tt=Math.min(t,11.0);const [hl,hr]=halHands(tt);
+  const held=[[hl[0]+6,hl[1]+16],[hr[0]-6,hr[1]+16],[hr[0]+280,hr[1]+450],[hl[0]-280,hl[1]+450]];
   const mid=[[900,540],[1440,540],[1560,840],[840,840]];
   const gnd=[[1060,802],[1620,802],[1740,1010],[980,1010]];
-  if(t<=11.0){const bob=Math.sin(t*TAU*0.9)*6;return held.map(p=>[p[0],p[1]+bob]);}
+  if(t<=11.0)return held;
   const Q=[];for(let i=0;i<4;i++){Q.push(kf2(t,[[11.0,held[i]],[11.42,mid[i],easeOut],[11.9,gnd[i],smooth]]));}return Q;}
 const seamS=t=>smooth(ramp(t,9.5,10.55));
 const seamZ=t=>kf(t,[[9.3,1],[10.0,9.5,smooth],[10.8,1,smooth]]);
@@ -344,58 +305,16 @@ function drawPicnicBG(t){ctx.setTransform(1,0,0,1,0,0);LWK=1;
 }
 function drawBasket(x,y){rrect(x-70,y-80,140,80,14,'#b8793f',OUT,5);for(let i=1;i<4;i++)line([[x-66,y-80+i*20],[x+66,y-80+i*20]],'#9c6330',3);ctx.beginPath();ctx.arc(x,y-80,55,Math.PI,TAU);ctx.lineWidth=10;ctx.strokeStyle='#8a5a3a';ctx.stroke();ctx.lineWidth=4;ctx.strokeStyle=OUT;ctx.stroke();
   rrect(x-60,y-92,60,22,6,'#ff6b6b',OUT,3);circ(x+35,y-92,16,'#7ed957',OUT,3);line([[x+35,y-108],[x+40,y-118]],'#3f9a45',4);}
-function picnicBall(t,handL){ // position of the cricket ball in picnic world
-  if(t<13.0)return null;
-  if(t<14.25){const u=easeOut(ramp(t,13.0,13.85));return {p:[lerp(-60,950,u),988],spin:lerp(-60,950,u)/22};}
-  if(t<14.55&&handL)return {p:[handL[0],handL[1]+2],spin:950/22};
-  return {p:[1012,984],spin:950/22};}
-function drawHaaland(t,clothQ,ballP){
-  const F=905;const hop=ramp(t,12.0,12.5);const x=lerp(960,1160,smooth(hop));const air=-140*Math.sin(Math.PI*hop);
-  const sit=smooth(ramp(t,12.1,12.5));const sq=t>12.5&&t<12.85?1-0.1*Math.sin(Math.PI*ramp(t,12.5,12.85)):1;
-  const hipY=lerp(F-240,F-118,sit)+air;const lean=kf(t,[[13.85,0],[14.2,-0.62],[14.55,-0.62],[14.95,0]]);
-  const bounceB=t<11.0?Math.sin(t*TAU*0.9)*4:0;
-  ctx.save();ctx.translate(x,F);ctx.scale(1,sq);ctx.translate(-x,-F);
-  // legs: shorts-thigh (skin) + sky socks + boots
-  for(const sg of[-1,1]){const hip=[x+sg*20,hipY];const kn=[lerp(x+sg*26,x+sg*128,sit),lerp(hipY+125,F-60,sit)];const ft=[lerp(x+sg*34,x+sg*44,sit),lerp(F,F-4,sit)];
-    limb([hip,kn],'#ffd9b8',34);limb([kn,ft],'#8fd1ff',30);ell(ft[0]+sg*6,ft[1],26,11,'#fff',OUT,4);}
-  // torso (rotated by lean about hip)
-  ctx.save();ctx.translate(x,hipY);ctx.rotate(lean);
-  rrect(-66,-178,132,186,30,'#7fc4f2',OUT,5);rrect(-74,-30,148,58,18,'#ffffff',OUT,5);
-  rrect(-20,-178,40,22,8,'#ffffff');ctx.fillStyle='#ffffff';ctx.font='bold 70px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('9',0,-88);
-  const sh=[[-58,-162],[58,-162]];
-  // head
-  const hc=[0,-262+bounceB];circ(hc[0]-30,hc[1]-70,32,'#f3cf66',OUT,5);               // bun
-  circ(hc[0],hc[1]-6,98,'#f3cf66',OUT,5);                                               // hair cap
-  circ(hc[0],hc[1]+10,90,'#ffd9b8',OUT,5);                                              // face
-  ctx.beginPath();ctx.arc(hc[0],hc[1]-6,98,Math.PI*1.05,Math.PI*1.95);ctx.lineTo(hc[0]+60,hc[1]-40);ctx.quadraticCurveTo(hc[0]+20,hc[1]-70,hc[0]-20,hc[1]-46);ctx.quadraticCurveTo(hc[0]-50,hc[1]-60,hc[0]-78,hc[1]-32);ctx.closePath();ctx.fillStyle='#f3cf66';ctx.fill();
-  ctx.beginPath();ctx.arc(hc[0],hc[1]-6,98,Math.PI*1.05,Math.PI*1.95);ctx.lineWidth=5*LWK;ctx.strokeStyle=OUT;ctx.stroke();
-  line([[hc[0]-92,hc[1]-30],[hc[0]+92,hc[1]-30]],'#2b2640',9);                          // headband
-  let fo;if(t<10.95)fo={eyes:'wide',mouth:'o',brows:1,browCol:'#d9b24a'};else if(t<12.0)fo={eyes:'open',mouth:'grin',brows:1,browCol:'#d9b24a'};
-  else if(t<13.2)fo={eyes:'open',mouth:'smile',brows:1,browCol:'#d9b24a'};else if(t<13.9)fo={eyes:'open',mouth:'flat',lx:-1,ly:0.6,brows:1,browUp:1,browSide:-1,browCol:'#d9b24a'};
-  else if(t<14.55)fo={eyes:'open',mouth:'smile',lx:-1,ly:0.8,brows:1,browCol:'#d9b24a'};else fo={eyes:'happy',mouth:'grin',brows:1,browCol:'#d9b24a'};
-  face(hc[0],hc[1]+10,88,fo);
-  ctx.restore();
-  // arms (screen space IK)
-  const shW=sh.map(p=>[x+p[0]*Math.cos(lean)-p[1]*Math.sin(lean),hipY+p[0]*Math.sin(lean)+p[1]*Math.cos(lean)]);
-  const restL=[x-92,hipY+40],restR=[x+92,hipY+40],kneeL=[x-118,F-70],kneeR=[x+118,F-70];
-  let hl,hr;
-  if(t<11.0){hl=[clothQ[0][0]+10,clothQ[0][1]+6];hr=[clothQ[1][0]-10,clothQ[1][1]+6];}
-  else{const rel=smooth(ramp(t,11.0,11.55));const a0L=[clothQ[0][0]+10,clothQ[0][1]+6],a0R=[clothQ[1][0]-10,clothQ[1][1]+6];
-    const upL=[x-150,hipY-250],upR=[x+150,hipY-250];
-    hl=[lerp(lerp(upL[0],restL[0],rel),kneeL[0],sit),lerp(lerp(upL[1],restL[1],rel),kneeL[1],sit)];hr=[lerp(lerp(upR[0],restR[0],rel),kneeR[0],sit),lerp(lerp(upR[1],restR[1],rel),kneeR[1],sit)];
-    if(t>=13.85){ // reach, grab, place, return
-      const tgtBall=[950,988],tgtCorner=[1012,984];const r1=smooth(ramp(t,13.85,14.25)),r2=smooth(ramp(t,14.25,14.55)),r3=smooth(ramp(t,14.6,14.95));
-      let T=[lerp(kneeL[0],tgtBall[0],r1),lerp(kneeL[1],tgtBall[1]-6,r1)];T=[lerp(T[0],tgtCorner[0],r2),lerp(T[1],tgtCorner[1]-6-Math.sin(Math.PI*r2)*70,r2)];T=[lerp(T[0],kneeL[0],r3),lerp(T[1],kneeL[1],r3)];hl=T;
-      const th=smooth(ramp(t,14.55,14.85));hr=[lerp(kneeR[0],x+120,th),lerp(kneeR[1],hipY-120,th)];}
-  }
-  const elL=ik(shW[0],hl,105,105,1),elR=ik(shW[1],hr,105,105,-1);
-  rrect(shW[0][0]-34,shW[0][1]-30,36,50,16,'#7fc4f2',OUT,4);rrect(shW[1][0]-2,shW[1][1]-30,36,50,16,'#7fc4f2',OUT,4);
-  limb([shW[0],elL,hl],'#ffd9b8',26);limb([shW[1],elR,hr],'#ffd9b8',26);
-  const thumbs=t>14.85;circ(hl[0],hl[1],18,'#ffd9b8',OUT,4);circ(hr[0],hr[1],18,'#ffd9b8',OUT,4);
-  if(thumbs){rrect(hr[0]-7,hr[1]-46,14,32,7,'#ffd9b8',OUT,4);}
-  ctx.restore();
-  return {handL:hl,handR:hr,x:x,hipY:hipY};
-}
+function picnicBall(t,hz){if(t<13.0)return null;const rh=hz?hz.reach:[974,935];const rest=[rh[0]-30,988],placed=[rh[0]+34,980];
+  if(t<14.25){const u=easeOut(ramp(t,13.0,13.85));const x=lerp(-60,rest[0],u);return {p:[x,rest[1]],spin:x/22};}
+  if(t<14.55){const u=smooth(ramp(t,14.25,14.55));return {p:[lerp(rest[0],placed[0],u),lerp(rest[1],placed[1],u)-Math.sin(Math.PI*u)*30],spin:rest[0]/22};}
+  return {p:placed,spin:rest[0]/22};}
+const HAL_POSES=[[0,'neutral'],[11.0,'release'],[12.0,'hop'],[12.5,'sit'],[13.85,'reach'],[14.6,'thumbs']];
+function halState(t){const hop=ramp(t,12.0,12.5);const x=lerp(960,1160,smooth(hop));const air=-140*Math.sin(Math.PI*hop);const base=lerp(905,940,smooth(hop))+air;
+  const sq=t>12.5&&t<12.85?1-0.1*Math.sin(Math.PI*ramp(t,12.5,12.85)):1;const bob=t<11.0?Math.sin(t*TAU*0.9)*4:0;return {x:x,base:base+bob,sq:sq};}
+function halHands(t){const s=halState(t);return [sprAnchor('footballer/neutral','handL',s.x,s.base,F_HAL),sprAnchor('footballer/neutral','handR',s.x,s.base,F_HAL)];}
+function drawHaaland(t){const s=halState(t);for(const [p,a] of poseMix(t,HAL_POSES,0.1))drawSprite('footballer/'+p,s.x,s.base,F_HAL,{alpha:a,sq:s.sq});
+  const hh=halHands(t);return {handL:hh[0],handR:hh[1],reach:sprAnchor('footballer/reach','hand',s.x,s.base,F_HAL),x:s.x};}
 function drawPicnicFX(t){if(t<14.6)return;const u=ramp(t,14.6,15.0);const r2=rng(3);for(let i=0;i<9;i++){const x=880+r2()*500,y=560+r2()*420,d=r2()*0.3;const k=sat((u-d)/0.5);const s=Math.sin(Math.PI*k)*(14+r2()*14);if(k>0&&k<1)star4(x,y,s,i%2?'#fff6a0':'#ffffff');}
   // tiny heart
   const k=smooth(ramp(t,14.75,15));ctx.save();ctx.translate(1300,520-40*k);ctx.scale(k,k);ctx.fillStyle='#ff6b8a';ctx.beginPath();ctx.moveTo(0,22);ctx.bezierCurveTo(-40,-10,-16,-40,0,-18);ctx.bezierCurveTo(16,-40,40,-10,0,22);ctx.fill();ctx.lineWidth=4;ctx.strokeStyle=OUT;ctx.stroke();ctx.restore();}
@@ -415,22 +334,19 @@ function frame(t){
   let hz=null;
   if(picnic){
     const standingBehind=t<11.9;
-    if(standingBehind){hz=drawHaaland(t,cloth.Q,null);}
+    if(standingBehind){hz=drawHaaland(t);}
     drawBasket(1520,905);
   }
   if(cloth){ // flag pole (world) before seam
-    if(!picnic){applyCam(cam);LWK=clamp(Math.pow(1/cam.z,0.55),1,2.4);const fw=flagQuadWorld(t);line([fw[4],fw[0]],'#f0e6c8',10);circ(fw[0][0],fw[0][1],12,'#ffd54f',OUT,4);ctx.setTransform(1,0,0,1,0,0);LWK=1;}
     drawCloth(cloth.Q,clothWaveFn(t,cloth.Z,cloth.s),[8,6],4,Math.max(3,4*Math.min(cloth.Z,1.5)));
     if(!picnic){applyCam(cam);LWK=clamp(Math.pow(1/cam.z,0.55),1,2.4);const b=ballPos(t);drawBall(b[0],b[1],19,ballSpin(t),1);ctx.setTransform(1,0,0,1,0,0);LWK=1;}
-    if(picnic&&hz&&t<11.0){circ(hz.handL[0],hz.handL[1],18,'#ffd9b8',OUT,4);circ(hz.handR[0],hz.handR[1],18,'#ffd9b8',OUT,4);}
   }
   if(picnic){
-    if(t>=11.9){hz=drawHaaland(t,cloth.Q,null);}
-    const bp=picnicBall(t,hz?hz.handL:null);
+    if(t>=11.9){hz=drawHaaland(t);}
+    const bp=picnicBall(t,hz);
     if(bp){ // dust puffs while rolling
       if(t>13.0&&t<13.9){ctx.globalAlpha=0.5*(1-ramp(t,13.5,13.9));for(let i=0;i<3;i++)circ(bp.p[0]-40-i*35,996-i*6,12+i*6,'#e9efd6');ctx.globalAlpha=1;}
       drawBall(bp.p[0],bp.p[1],22,bp.spin,1);
-      if(hz&&t>=14.25&&t<14.55)circ(hz.handL[0],hz.handL[1],18,'#ffd9b8',OUT,4);
     }
     drawPicnicFX(t);
   }
@@ -440,6 +356,6 @@ function frame(t){
 }
 window.__frame=function(t){frame(t);return cv.toDataURL('image/png');};
 window.__draw=function(t){frame(t);};
-window.__ready=true;
-const q=new URLSearchParams(location.search);if(q.has('t'))frame(parseFloat(q.get('t')));
+const q=new URLSearchParams(location.search);
+loadSprites().then(()=>{initRig();window.__ready=true;if(q.has('t'))frame(parseFloat(q.get('t')));});
 </script></body></html>
