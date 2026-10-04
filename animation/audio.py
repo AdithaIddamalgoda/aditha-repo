@@ -192,6 +192,29 @@ for bt, f in melody:
 for bar, f in enumerate([C4/2, G4/4, A4/4, C4*2/3]):
     add(pluck(f, 1.0, 0.5), t0 + bar*2*beat, pan=0.0, gain=0.5)
 
+# start-light beeps (lights come on 4.0-4.8), 'go' chirp at lights-out 5.35
+for i in range(5):
+    n = int(0.07*SR); t = np.arange(n)/SR
+    add(np.sin(2*np.pi*880*t)*np.sin(np.pi*t/0.07)**0.5*0.12, 4.0 + i*0.16, pan=0.2)
+n = int(0.12*SR); t = np.arange(n)/SR
+add(np.sin(2*np.pi*1320*t)*np.exp(-t*25)*0.12, 5.35, pan=0.2)
+# bird squawk when the ball scatters the flock (~3.2 s)
+for k in range(2):
+    n = int(0.09*SR); t = np.arange(n)/SR
+    add(sweep_tone(2400 + 900*np.sin(np.pi*t/0.09), n)*np.sin(np.pi*t/0.09)*0.07, 3.15 + k*0.12, pan=0.3)
+# confetti cannon at the finish 8.58
+n = int(0.3*SR); t = np.arange(n)/SR
+add((bandpass(noise(n), 400, 5000)*np.exp(-t*30) + 0.6*sweep_tone(lin(n, 700, 180), n)*np.exp(-t*18))*0.5, 8.58)
+# exhaust crackle on launch
+for k in range(6):
+    n = int(0.03*SR); t = np.arange(n)/SR
+    add(bandpass(noise(n), 300, 2500)*np.exp(-t*120)*0.25, 5.36 + k*0.045 + k*k*0.004)
+# ladybird take-off buzz 14.55, iris 'boop' 14.75
+n = int(0.3*SR); t = np.arange(n)/SR
+add(np.sign(np.sin(2*np.pi*190*t*(1+0.03*np.sin(2*np.pi*30*t))))*np.sin(np.pi*t/0.3)*0.025, 14.55, pan=0.2)
+n = int(0.25*SR); t = np.arange(n)/SR
+add(sweep_tone(lin(n, 520, 240), n)*np.exp(-t*10)*0.16, 14.75)
+
 # hop plop 12.5, ball roll 13.0-13.85, pat 14.55, sparkle 14.6
 add(thud(180, 70, 0.2, 0.7), 12.5)
 n = int(0.9*SR); t = np.arange(n)/SR
@@ -199,7 +222,7 @@ roll = bandpass(noise(n), 90, 500, 0.5)*(0.5+0.5*np.sin(2*np.pi*np.interp(t, [0,
 add(roll*0.3, 13.0, pan=-0.4)
 add(thud(220, 110, 0.12, 0.6), 14.55, pan=-0.2)
 for i, f in enumerate([C5*2, E5*2, G5*2, C5*4]):
-    add(bell(f, 0.9)*0.12, 14.6 + i*0.07, pan=-0.3 + i*0.2)
+    add(bell(f, 0.9)*0.12, 14.5 + i*0.07, pan=-0.3 + i*0.2)
 
 # ------------------------------------------------------------------ master
 mix = np.stack([L, R], axis=1)

@@ -1,7 +1,9 @@
 # Six to Picnic
 
-A 15-second 2D cartoon (1920×1080, 60 fps, stereo sound) in which one object carries the audience
-through three worlds without a single cut:
+A 15-second 2D cartoon (1920×1080, 60 fps, stereo sound). A little cricket ball spends its day being used by
+other people's games, bowled, smashed out of the ground, carried off at speed, until it rolls into a picnic where
+somebody finally needs it. The full beat sheet is in [`animation/SCRIPT.md`](animation/SCRIPT.md). One object
+carries the audience through three worlds without a single cut:
 
 | Time | Beat | How the seam is carried |
 |------|------|-------------------------|
@@ -9,9 +11,9 @@ through three worlds without a single cut:
 | 5 s | Ball drops into the airbox of a navy F1 car on the start grid. | The ball's bounce becomes the car's squash-and-rev; the start lights go out and the car launches. The camera never stops tracking the ball, which is now part of the car. |
 | 5–10 s | Car tears down the straight to the finish; the marshal's checkered flag is waved and swells to fill the frame. | The flag is one waving cloth mesh that scales up in place until the screen is pure checkered pattern. |
 | 10 s | Pull back from the pattern: it is a blanket in mid-air held by a tall blond footballer. | Same mesh, same wave phase; the flag's flutter decays into the blanket's flutter as it settles on the grass. |
-| 10–15 s | He flicks the blanket out, hops onto it, and a corner keeps flapping, until the cricket ball rolls in from the left and he pins the corner with it. | The ball callback stitches all three worlds into one. |
+| 10–15 s | He flicks the blanket out, hops onto it, tries and fails to press a flapping corner flat, until the dizzy cricket ball rolls in and he pins the corner with it. A ladybird lands on the sleeping ball as the iris closes. | The ball callback stitches all three worlds into one and resolves the picnic's one problem. |
 
-Deliverable: [`six_to_picnic.mp4`](six_to_picnic.mp4) (H.264 + AAC, ~8.5 MB).
+Deliverable: [`six_to_picnic.mp4`](six_to_picnic.mp4) (H.264 + AAC, ~10.5 MB).
 
 ## Pipeline (Playwright + ffmpeg frame render)
 
