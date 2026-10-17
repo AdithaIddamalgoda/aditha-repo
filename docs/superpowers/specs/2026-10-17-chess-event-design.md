@@ -68,10 +68,13 @@ finished game can be shared as an Instagram story card.
    board corners, and picks the event (name and date). The framing check runs
    against the start position and goes green.
 2. **New game.** Players sit and choose colours at the board. Operator taps
-   "New game", picks their own colour, and enters the opponent: search by
-   username, or type a name for a guest. Which physical side is White is
-   detected per game from the start-position reading, since colours change from
-   game to game while the camera does not move.
+   "New game" and picks their own colour. The opponent is attached in one of two
+   ways: the table phone shows a QR code and a six-character join code, and the
+   opponent scans it, signs in, and taps the free colour; or the operator enters
+   them by searching a username or typing a guest name. The table phone shows
+   the seat fill in as it happens. Which physical side is White is detected per
+   game from the start-position reading, since colours change from game to game
+   while the camera does not move.
 3. **Play.** Moves are decoded on-device as before. Each accepted ply is sent to
    the server; the live board page updates for spectators.
 4. **End.**
@@ -91,6 +94,8 @@ finished game can be shared as an Instagram story card.
 - **Sign in with Google** only (Google Identity Services ID token, verified
   server-side with audience check). On first sign-in the person chooses a unique
   username, 3 to 20 characters, letters, digits, underscore, editable later.
+- **(owner's decision)** Guests are rated and shown on the leaderboard, and
+  can be claimed later. QR self-join ships at launch alongside operator entry.
 - **Players are separate from accounts.** A player row has a username and an
   optional linked account. A guest typed by the operator is a player without an
   account. Guest players appear on the leaderboard under the typed name.
@@ -99,6 +104,9 @@ finished game can be shared as an Instagram story card.
   guest player is linked to the account; history and rating carry over.
   **(my call)** Approval goes through the operator because nothing else at a
   social event can verify a name.
+- **Join codes.** A game in `setup` has a join code valid for 10 minutes,
+  encoded in the QR as `/join/<code>`. Joining needs a signed-in account and a
+  free colour; the operator can remove a joined player before the first move.
 - **Roles.** The operator's account is admin via an `ADMIN_EMAILS` setting.
   Admin can start games, end games, approve claims, edit results, and delete
   games. Players can view, dispute, claim, and share.
@@ -191,7 +199,8 @@ finished game can be shared as an Instagram story card.
   - `audit(id, user_id, action, target, at)`
 - **API** (JSON, cookie session): `POST /auth/google`, `POST /auth/logout`,
   `GET /me`, `PUT /me/username`, `GET /players/search?q=`, `POST /events`,
-  `POST /tables`, `POST /games`, `POST /games/{id}/moves`,
+  `POST /tables`, `POST /games`, `GET /join/{code}`, `POST /games/{id}/join`,
+  `GET /games/{id}/seats/stream`, `POST /games/{id}/moves`,
   `POST /games/{id}/finish`, `GET /games/{id}`, `GET /games?player=`,
   `GET /leaderboard?event=`, `GET /live/{table}/stream`,
   `GET /games/{id}/story.png`, `POST /claims`, `POST /disputes`,
@@ -206,7 +215,7 @@ finished game can be shared as an Instagram story card.
 
 ## Hosting
 
-**(my call, needs approval)** A new small Lighthouse instance in Singapore for
+**(owner's decision, 2026-10-17)** A new small Lighthouse instance in Singapore for
 production: 2 vCPU, 2 GB, Ubuntu 22.04, Caddy + the backend + the static app +
 the model and runtime files on one box, firewall 443 and 80 open, SSH restricted
 to the owner's address range with the console terminal as fallback. The dev VM
@@ -246,8 +255,8 @@ untouched; restyle around it.
 
 ## Order of delivery
 
-1. Backend core: auth, players, events, tables, games, moves, finish, config.
-   Table phone sends moves. Live board.
+1. Backend core: auth, players, events, tables, games, join codes, moves,
+   finish, config. Table phone sends moves. Live board.
 2. Game end automation and board-reset detection on the phone; result prompt.
 3. History, leaderboard, rating, claims, disputes, admin.
 4. Settings page with the download toggles and "Prepare for the event".
