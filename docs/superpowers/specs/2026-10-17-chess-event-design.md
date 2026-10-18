@@ -263,3 +263,85 @@ untouched; restyle around it.
 5. Interface pass over every page with the design skills.
 6. Post-game analysis and the story card.
 7. Production box, DNS, Google client, deploy, backup. Each with approval.
+
+## Addendum, 2026-10-18: board detection without taps, and the 3D twin
+
+Field test on 2026-10-17: tapping four corners on a phone is too fiddly, there
+is no undo, and the side-on tripod angle makes pieces hide each other. The
+research in `docs/superpowers/research/2026-10-18-chess-recognition-angles.md`
+found that neither published model uses state, rules, time, or occlusion, and
+that no paper reports accuracy per camera angle. This addendum adds two things
+to the design. They go in the next plan ahead of the accounts work, because the
+table flow depends on them.
+
+### Start with no taps
+
+- The recognizer runs once on the Start frame with attention outputs enabled.
+  Each of its 64 square queries has an attention centroid in the image. A
+  homography is fitted from the ideal square centres to those centroids with
+  RANSAC; at least 48 of 64 inliers are required.
+- The grid is drawn over the camera view. It is accepted automatically when the
+  start-position reading goes green under some rotation. Otherwise the four
+  corners become large draggable handles with a magnifier loupe, an undo stack,
+  and "find again".
+- The grid is re-fitted automatically when bump detection fires.
+- The app picks the phone's main rear camera by device id, never the ultrawide,
+  and shows the camera elevation estimated from the grid with a hint when it is
+  below 50 degrees. Target 55 to 65 degrees.
+- ChessQueries' own corner detector is not used; the paper reports it fails on
+  most ChessReD photos. A learned corner model is a fallback only if the
+  attention fit fails on the owner's photos, and would train on the rendered
+  and ChessReD2K corner labels listed in the research notes.
+
+### The 3D twin (analysis by synthesis)
+
+The decoder already has the state and transition model: the position is known
+exactly at the start, and only legal moves, undos, two-ply skips, and rare
+illegal moves can follow. The twin adds a second observation channel that is
+independent of the learned recognizer and reasons about occlusion explicitly.
+
+- **Camera.** The grid homography plus the focal length recovered from the two
+  vanishing points of the grid lines gives a full camera pose. Wobble is
+  handled by re-estimating the homography each frame from the board texture.
+- **Pieces.** Each type is a cylinder of a height and radius in square units,
+  standing on its square centre; projecting it gives a silhouette mask. Default
+  dimensions follow Staunton proportions; per-set calibration from the start
+  frame is a later improvement.
+- **Visibility.** For a state, the painter's-order render gives each piece's
+  visible fraction `v_s`. The recognizer's log-probability on square `s` is
+  weighted by `v_s`, so hidden squares stop voting.
+- **Silhouette change.** For a candidate state, the predicted change mask is
+  the XOR of its render with the previous state's render. The observed change
+  mask is the thresholded, brightness-normalised difference between the two
+  stable frames. The score is the intersection over union in the union region.
+  Textures and lighting are never modelled.
+- **Posterior.** `log P(s_t) = Σ_s v_s · lp_s + λ · IoU + log prior(tier)`. The
+  decoder keeps a beam of the top three hypotheses so an ambiguous move
+  resolves on the next frame. Expected change masks for all legal replies are
+  rendered during the opponent's thinking time.
+- **Cost.** Masks are a few polygons on a 128-pixel crop; thirty candidates
+  take well under a millisecond each. When the silhouette term alone leaves one
+  candidate with a wide margin, the recognizer is confirmation only and can be
+  skipped, which cuts latency.
+- **Tooling.** Whether to hand-roll the projection and masks or use an existing
+  library is decided by `docs/superpowers/research/2026-10-18-3d-twin-tooling.md`
+  before the twin tasks start. The default, pending that file, is hand-rolled
+  projection with no new dependency.
+- **Gate.** On the recorded corpus, the combined scorer must beat the
+  recognizer-only decoder on silent errors and prompts, measured with
+  recognizer-only, silhouette-only, and combined runs. If it does not, the
+  twin stays as the visibility weighting only.
+
+### The data flywheel
+
+Every photo in a finished game has a known position once the PGN is confirmed.
+An adapter turns the corpus into the dataset format the ChessQueries few-shot
+LoRA script expects. A fine-tuned large model serves as the server second
+opinion; a fine-tuned Lite is distilled for the phone later. Training runs on
+the dev VM overnight or on a rented GPU for an hour with approval.
+
+### Order of delivery, revised
+
+0. This addendum: auto-grid, camera guidance, twin spike and integration,
+   corpus adapter and first fine-tune.
+1. to 7. as above.
