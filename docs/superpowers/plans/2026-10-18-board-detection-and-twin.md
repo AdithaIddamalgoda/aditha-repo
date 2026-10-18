@@ -45,7 +45,7 @@
 - Task 0 → Task 1 → Task 2 (auto-grid track).
 - Task 3 → Task 4 → Task 5 → Task 6 (twin track; Task 3 needs only `homography.ts`).
 - Task 7 is independent and can run in parallel on the VM.
-- Read `docs/superpowers/research/2026-10-18-3d-twin-tooling.md` before Task 3. If it recommends a library for projection or masks, use it and keep the signatures below.
+- The tooling research (`docs/superpowers/research/2026-10-18-3d-twin-tooling.md`) recommends hand-rolled geometry and no new runtime dependency. OpenCV.js is the fallback only if Task 3's synthetic tests miss the 2-degree target or wobble turns out to include rotation; then use `solvePnP` from a whitelisted minimal build. Rotation drift is handled by re-running the grid fit, not a tracker.
 
 ---
 
@@ -160,7 +160,7 @@ export class Twin {
 ```
 
 - [ ] **Step 1: Write failing tests** on a synthetic 60-degree camera: `king mask is taller than pawn mask`, `a pawn directly in front of a king from the camera's side reduces the king's visibility below 0.7`, `visibility of a piece with nothing in front is 1`, `changeMask of e2e4 is non-zero only around e2 and e4`.
-- [ ] **Step 2: Run** → FAIL. **Step 3: Implement.** Rasterise polygons with a scanline fill; no WebGL.
+- [ ] **Step 2: Run** → FAIL. **Step 3: Implement.** Rasterise convex hulls with a scanline fill into one `Int16Array` ID buffer, painting piece indices far to near; `visibility` and every silhouette then come from that one pass. No WebGL, no library (decision from the tooling research: three.js and OpenCV.js are overkill here).
 - [ ] **Step 4: Run** → PASS. **Step 5: Commit** `feat(web): 3D twin silhouettes and visibility`
 
 ---
