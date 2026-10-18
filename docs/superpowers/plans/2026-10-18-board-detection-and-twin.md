@@ -143,11 +143,11 @@ export function project(K: Intrinsics, pose: Pose, X: [number, number, number]):
 
 **Files:**
 - Create: `web/src/twin.ts`
+- Modify: `web/src/types.ts` (add `export interface Mask { w: number; h: number; data: Uint8Array }`, the 128 x 128 analysis crop, so `homography.ts` and `twin.ts` both import it without a cycle)
 - Test: `web/test/twin.test.ts`
 
 **Interfaces:**
 ```ts
-export interface Mask { w: number; h: number; data: Uint8Array }     // 128 x 128 analysis crop
 export interface PieceDims { h: number; r: number }
 export const DEFAULT_DIMS: Record<Exclude<PieceClass, 'empty'>, PieceDims>;   // Global Constraints values; colour variants share dims
 export class Twin {
