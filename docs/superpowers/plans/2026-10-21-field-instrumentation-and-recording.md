@@ -2,30 +2,32 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make every field session produce the evidence needed to tune the capture pipeline (what the model saw, what it answered, what the decoder did, and how long each stage took), and stop a bad frame from stranding the app until the next large motion.
+**Goal:** Stop camera movement or any other change of scene from ever producing a move, then make every field session produce the evidence needed to tune the capture pipeline (what the model saw, what it answered, what the decoder did, and how long each stage took).
 
-**Architecture:** A pure reading-sanity check (both kings visible, no pieces appearing from nowhere) runs before the decoder and turns a bad frame into a retake after one second instead of a pending count. A ring-buffer debug log and a HUD expose every capture gate live. With an opt-in toggle, the server keeps each crop it receives, the reading it returned, the client's event log, the operator's "mark" taps and the confirmed PGN under a session directory; an import script turns a recorded session into the existing corpus layout so `bench.ts` and `metrics.py` run unchanged.
+**Architecture:** The decoder gains a residual gate: a candidate is accepted only when the rest of the reading agrees with the candidate's board, so a shifted or re-cropped scene can never be explained by a lucky legal move. Camera movement, from the bump detector, the phone's motion sensors, or a scene-change residual, pauses decoding until one settled frame agrees with the tracked position again. A pure reading-sanity check (both kings visible, no pieces appearing from nowhere) runs before the decoder and turns a bad frame into a retake after one second instead of a pending count. A ring-buffer debug log and a HUD expose every capture gate live. With an opt-in toggle, the server keeps each crop it receives, the reading it returned, the client's event log, the operator's "mark" taps and the confirmed PGN under a session directory; an import script turns a recorded session into the existing corpus layout so `bench.ts` and `metrics.py` run unchanged.
 
 **Tech Stack:** Existing web app (vanilla TypeScript, Vite, vitest), existing FastAPI server (`server/app.py`), existing `eval/` Python 3.12 via uv with `python-chess`. No new runtime dependency.
 
-**Spec:** `docs/superpowers/research/2026-10-21-capture-latency-diagnosis.md` (sections 4, 5, 9) and the original design in `docs/superpowers/plans/2026-10-17-chess-camera.md` (Tasks 11 to 14, 17). If the live code names differ from the interfaces quoted below, use the live names and say so in the task's commit message.
+**Spec:** `docs/superpowers/research/2026-10-21-capture-latency-diagnosis.md` (sections 4, 5, 9, 10, 11) and the original design in `docs/superpowers/plans/2026-10-17-chess-camera.md` (Tasks 11 to 14, 17). If the live code names differ from the interfaces quoted below, use the live names and say so in the task's commit message.
 
 ## Global Constraints
 
 - Node 22, TypeScript `strict: true`, no UI framework; Python 3.12 via `uv` in `eval/` and `server/`.
 - Square index `a1 = 0 ... h8 = 63`; canonical class order `empty, wP, wN, wB, wR, wQ, wK, bP, bN, bB, bR, bQ, bK`; probability floor `1e-3`.
-- No behaviour change to the capture thresholds (`stableDiff`, `stableMs`, `changeMin`, `shiftPx`, `maxFramesPerMove`) or the decoder thresholds in this plan. Measuring comes first.
+- No behaviour change to the capture thresholds (`stableDiff`, `stableMs`, `changeMin`, `shiftPx`, `maxFramesPerMove`) or to `acceptMin`, `marginMin`, `pendingMax`, the priors. The residual gate (Task 0) is the one decoder change, and it only makes acceptance stricter. Measuring comes first for everything else.
+- Decoder residual gate: `residualMax = 4` squares (reading disagrees with the candidate board, using the existing `disagreeP = 0.2`); `sceneChangeResidual = 12` squares on two consecutive frames pauses decoding. Motion sensor: `rotRateDegS = 30`, `accelMs2 = 1.5`, `quietMs = 1500`; absent sensors mean a no-op, never an error.
 - Sanity constants: `kingMinP = 0.5`, `totalTolerance = 1` (argmax-occupied squares may exceed the tracked count by at most 1). Retake constants: `retakeMs = 1000`, `retakeMax = 3` per stable period. Debug log capacity `2000` events; `frame` events sampled every 5th video frame; event flush to the server every `30 s` and at session end.
 - Images are stored only when the operator turns on "Record this session" and the server holds a matching `CHESS_RECORD_KEY`. Storage root `CHESS_DATA_DIR`, default `server/data`. Recording stops silently when free space is under 1 GB. Nothing is stored on the phone.
 - No Tencent, DNS, or Google change in any task. Every measurement goes into `eval/RESULTS.md` with date, device, build hash, and command.
 
 ## Review Focus
 
-1. A king hidden behind a taller piece from the camera's side, where the recognizer still puts 0.5 or more on the king class at that square. Expected: the frame passes sanity; no retake, no prompt. Test in Task 0.
-2. A capture, so the reading has one piece fewer than the tracked board. Expected: sanity passes, because pieces may vanish, never appear. Test in Task 0.
-3. The server is unreachable for one read mid-game. Expected: the queue logs the error, requests a retake, and decodes the next frame in order; the app never stalls. Test in Task 1.
-4. The recording toggle is on but the server key is missing or wrong. Expected: recognition works exactly as before, nothing is stored, and the HUD shows recording off. Test in Task 3.
-5. The operator taps "mark" fewer times than there are plies in the PGN. Expected: the importer labels nothing it cannot justify, reports the mismatch, and still writes the frames and readings. Test in Task 4.
+0. The phone is picked up, moved, and put back mid-game. Expected: no move is accepted while it moves or afterwards; the first still frame is checked against the tracked position; decoding resumes with no prompt when it agrees, else the re-frame prompt opens. Tests in Task 0 (residual gate) and Task 1 (pause and resync).
+1. A king hidden behind a taller piece from the camera's side, where the recognizer still puts 0.5 or more on the king class at that square. Expected: the frame passes sanity; no retake, no prompt. Test in Task 2.
+2. A capture, so the reading has one piece fewer than the tracked board. Expected: sanity passes, because pieces may vanish, never appear. Test in Task 2.
+3. The server is unreachable for one read mid-game. Expected: the queue logs the error, requests a retake, and decodes the next frame in order; the app never stalls. Test in Task 3.
+4. The recording toggle is on but the server key is missing or wrong. Expected: recognition works exactly as before, nothing is stored, and the HUD shows recording off. Test in Task 5.
+5. The operator taps "mark" fewer times than there are plies in the PGN. Expected: the importer labels nothing it cannot justify, reports the mismatch, and still writes the frames and readings. Test in Task 6.
 
 ## Before Task 0
 
@@ -33,14 +35,97 @@ Answer the eight factual questions in the brief's section 6 (deployed build hash
 
 ## Task dependency map
 
-- Task 0 → Task 1 (sanity feeds retake).
-- Task 2 is independent; Task 3 needs Task 2 (it uploads the log).
-- Task 4 needs Task 3's on-disk layout only.
-- Task 5 is the measurement run; needs Tasks 0 to 3 deployed.
+- Task 0 first; Task 1 needs Task 0 (`check` and the residual). Nothing else may start before Task 0 is merged.
+- Task 2 → Task 3 (sanity feeds retake).
+- Task 4 is independent; Task 5 needs Task 4 (it uploads the log).
+- Task 6 needs Task 5's on-disk layout only.
+- Task 7 is the measurement run; needs Tasks 0 to 5 deployed.
 
 ---
 
-### Task 0: Reading sanity check
+### Task 0: Residual gate in the decoder
+
+**Files:**
+- Modify: `web/src/decoder.ts` (`DecoderConfig`, `DEFAULT_CONFIG`, `step`), `web/src/score.ts` if `disagreeing` needs a board argument
+- Test: `web/test/decoder.test.ts`
+
+**Interfaces:**
+- Consumes: `disagreeing(board: Board, lp: LogProbs): number[]` from `score.ts` (squares where the reading's argmax differs from `board` with probability at least `disagreeP`); `Scored` with its rotation; `synthReading` from `web/test/synth.ts`.
+- Produces:
+```ts
+// DecoderConfig additions
+residualMax: number;             // 4
+// Outcome additions: every outcome carries the residual of the frame against the board it was judged on
+//   move:     residual = disagreeing(candidate.board, lp at the winning rotation).length
+//   nochange: residual = disagreeing(state.board, lp at the current rotation).length
+//   pending:  residual as for the best candidate; reason 'unexplained' when residual > residualMax
+export interface CheckResult { ok: boolean; residual: number; rotation: Rotation }
+// Decoder addition, used by Task 1 for the resync and by the start check:
+check(lp: LogProbs): CheckResult;   // best of four rotations against the current tracked board; ok when residual <= residualMax
+```
+- Step order after this task: generate, `scoreAll`, best `b`, runner-up `r`; compute `residual_b = disagreeing(b.board, lp_rot(b)).length`; **if `residual_b > residualMax` → pending 'unexplained'** (this check runs first, on every branch); else the existing rules (`acceptMin`, then `marginMin`, then accept). `pendingMax` and `ask` unchanged. The start check `calibrate` becomes `check` against `START_BOARD`.
+
+- [ ] **Step 1: Quote the live step order** of `Decoder.step` in `eval/RESULTS.md` under a dated heading, two to five lines, so the mechanism in the brief's section 11 is confirmed or corrected before changing it.
+- [ ] **Step 2: Write the failing tests** in `web/test/decoder.test.ts`:
+  - `a frame that disagrees on ten squares is pending even when a legal move explains two of them` (state after 1. e4; reading = board after 1. e4 e5 with ten other squares set to a wrong piece at p 0.9; expect `kind: 'pending'`, `reason: 'unexplained'`, `residual >= 10`, `state.board` unchanged).
+  - `a reading of the board shifted by one file is pending, not a move` (reading built from the tracked board with every piece moved one file left; expect pending and board unchanged).
+  - `three shifted frames in a row produce ask, never a move` (`pendingMax` frames; expect `kind: 'ask'` and `state.history` unchanged).
+  - `a clean reading with the move is still accepted and reports residual 0` (regression).
+  - `check returns the rotation that agrees` (reading rotated 180 degrees of the tracked board → `ok` true, `rotation` 2, `residual` 0).
+- [ ] **Step 3: Run** `cd web && npx vitest run test/decoder.test.ts` → the five new tests FAIL, existing ones PASS.
+- [ ] **Step 4: Implement** the residual, `residualMax`, the new step order, and `check`.
+- [ ] **Step 5: Run** `npx vitest run` → all PASS, including every pre-existing decoder test (Review Focus 1 to 4 of the original plan must still hold: the two-ply recovery, the lifted piece, the illegal move after pending).
+- [ ] **Step 6: Commit** `fix(web): decoder never accepts a move on a frame that disagrees elsewhere`
+
+---
+
+### Task 1: Camera movement pauses decoding until a resync
+
+**Files:**
+- Create: `web/src/motion.ts`
+- Modify: `web/src/queue.ts`, `web/src/app.ts`, `web/src/ui/board.ts` or the tracking screen file (banner and Undo button)
+- Test: `web/test/motion.test.ts`, `web/test/queue.test.ts`
+
+**Interfaces:**
+- Consumes: `Decoder.check` and the per-outcome `residual` (Task 0); `CaptureEvent` `bumped`; `Capture.markAccepted`.
+- Produces:
+```ts
+// motion.ts
+export interface MotionConfig { rotRateDegS: number; accelMs2: number; quietMs: number }   // 30, 1.5, 1500
+export interface MotionSample { t: number; rot: number; accel: number }                     // max abs rotationRate component (deg/s), |acceleration| without gravity (m/s^2)
+export class MotionClassifier {            // pure
+  constructor(cfg: MotionConfig);
+  push(s: MotionSample): 'moving' | 'still' | 'settled';   // 'settled' once, after quietMs below both thresholds following a 'moving'
+}
+export class MotionSensor {               // wraps window 'devicemotion'; no-op when the event or its fields are unavailable
+  constructor(cfg?: MotionConfig);
+  start(): void; stop(): void;
+  on(cb: (e: { kind: 'camera-moved' } | { kind: 'camera-still' }) => void): void;
+}
+// queue.ts
+export type QueueState = 'tracking' | 'paused';
+pause(cause: 'bumped' | 'sensor' | 'scene'): void;   // drops every frame until resumed; emits {kind:'paused', cause} to the outcome callback
+// resync rule: while paused and after 'camera-still' (or at once for 'scene'), each settled frame is read and passed to decoder.check;
+//   ok -> decoder.rotation = result.rotation, capture.markAccepted(frame), state 'tracking', emit {kind:'resumed', residual, rotation}
+//   not ok -> emit {kind:'reframe', residual}; stay paused
+// scene rule: two consecutive 'tracking' outcomes with residual > sceneChangeResidual (12) -> pause('scene')
+```
+- `app.ts`: `bumped` → `queue.pause('bumped')`; `camera-moved` → `queue.pause('sensor')`; banner "Camera moved. Keep it still." while paused; `reframe` opens the existing re-frame prompt (corner taps today, the nudge UI once the board-detection plan lands). An "Undo last move" button is always visible on the tracking screen and calls the same undo path the fix sheet's "undo last" uses; each tap undoes one more ply.
+
+- [ ] **Step 1: Write the failing tests** in `web/test/motion.test.ts`: `a rotation burst then quiet yields moving then settled after quietMs`, `samples below both thresholds never yield moving`, `acceleration alone above accelMs2 yields moving`.
+- [ ] **Step 2: Run** → FAIL. **Step 3: Implement `MotionClassifier` and `MotionSensor`.** **Step 4: Run** → PASS.
+- [ ] **Step 5: Write the failing queue tests**:
+  - `paused queue drops frames and steps nothing` (spy on `decoder.step`).
+  - `resumes only after a frame passes check, and adopts its rotation` (FileRecognizer: one disagreeing reading, then one rotated-180 agreeing reading → `reframe` then `resumed` with `rotation` 2; `decoder.step` not called for either).
+  - `two consecutive high-residual frames pause the queue with cause scene` (Review Focus 0: two readings of a shifted board → `paused`, no `move`).
+  - `a bumped event pauses before the next frame is decoded`.
+- [ ] **Step 6: Run** → FAIL. **Step 7: Implement** in `queue.ts` and wire `app.ts`, the banner, and the Undo button. **Step 8: Run** `npx vitest run` → all PASS.
+- [ ] **Step 9: Phone check**: pick the phone up mid-game and put it back; the banner shows, no move appears, tracking resumes without a prompt when the framing is the same. Slide the tripod 10 cm: the re-frame prompt opens. Record both in `eval/RESULTS.md`.
+- [ ] **Step 10: Commit** `feat(web): camera movement pauses decoding until the board agrees again`
+
+---
+
+### Task 2: Reading sanity check
 
 **Files:**
 - Create: `web/src/sanity.ts`
@@ -62,7 +147,7 @@ export function checkReading(lp: LogProbs, board: Board, cfg?: SanityConfig): Sa
 // three phantom pieces); trackedTotal = occupied squares of board;
 // 'too-many-pieces' when expectedTotal > trackedTotal + totalTolerance. Rotation-invariant by construction.
 // queue.ts: new outcome kind emitted to the app's outcome callback and the debug log:
-export type QueueOutcome = Outcome | { kind: 'badframe'; seq: number; sanity: Sanity; forced: boolean };   // forced: decoder was stepped anyway (Task 1)
+export type QueueOutcome = Outcome | { kind: 'badframe'; seq: number; sanity: Sanity; forced: boolean };   // forced: decoder was stepped anyway (Task 3)
 ```
 
 - [ ] **Step 1: Write the failing tests** in `web/test/sanity.test.ts`:
@@ -82,14 +167,14 @@ export type QueueOutcome = Outcome | { kind: 'badframe'; seq: number; sanity: Sa
 
 ---
 
-### Task 1: Retake timer
+### Task 3: Retake timer
 
 **Files:**
 - Modify: `web/src/capture.ts` (`CaptureConfig`, `Capture`, `StabilityDetector`), `web/src/queue.ts`
 - Test: `web/test/capture.test.ts`, `web/test/queue.test.ts`
 
 **Interfaces:**
-- Consumes: `QueueOutcome` from Task 0; `CaptureEvent`, `StableFrame` from `capture.ts`.
+- Consumes: `QueueOutcome` from Task 2; `CaptureEvent`, `StableFrame` from `capture.ts`.
 - Produces:
 ```ts
 // CaptureConfig additions
@@ -115,7 +200,7 @@ requestRetake(): void;   // after retakeMs, if no 'moving' since the request, em
 
 ---
 
-### Task 2: Debug log, HUD, server timing
+### Task 4: Debug log, HUD, server timing
 
 **Files:**
 - Create: `web/src/debuglog.ts`, `web/src/ui/hud.ts`
@@ -124,14 +209,16 @@ requestRetake(): void;   // after retakeMs, if no 'moving' since the request, em
 - Test: `web/test/debuglog.test.ts`, `web/test/recognizer.test.ts`, `server/tests/test_app.py`
 
 **Interfaces:**
-- Consumes: `QueueOutcome`, `Sanity` (Task 0); `CaptureEvent` including `retake` (Task 1); `Reading.ms` from the contract.
+- Consumes: `QueueOutcome`, `Sanity` (Task 2); `CaptureEvent` including `retake` (Task 3); `Reading.ms` from the contract.
 - Produces:
 ```ts
 export type DebugEvent =
   | { kind: 'frame';    t: number; meanDiff: number; state: 'moving' | 'stable' | 'settled' }
   | { kind: 'settle';   t: number; seq: number; maxEnergy: number; energy: number[]; dropped: boolean }
   | { kind: 'read';     t: number; seq: number; cropW: number; cropH: number; jpegBytes: number; uploadMs: number; serverMs: number; totalMs: number; error?: string }
-  | { kind: 'decode';   t: number; seq: number; outcome: 'move' | 'nochange' | 'pending' | 'ask'; tier?: Tier; score: number; margin: number; rotation: Rotation; pendingCount: number }
+  | { kind: 'decode';   t: number; seq: number; outcome: 'move' | 'nochange' | 'pending' | 'ask'; tier?: Tier; score: number; margin: number; residual: number; rotation: Rotation; pendingCount: number }
+  | { kind: 'paused';   t: number; cause: 'bumped' | 'sensor' | 'scene' }
+  | { kind: 'resumed';  t: number; residual: number; rotation: Rotation }
   | { kind: 'badframe'; t: number; seq: number; reasons: SanityReason[]; kingP: { w: number; b: number }; forced: boolean }
   | { kind: 'retake';   t: number; n: number }
   | { kind: 'user';     t: number; note: string };
@@ -147,7 +234,7 @@ export class DebugLog {
 - `Capture` gains a diagnostics callback `onDiag(cb: (e: DebugEvent) => void)` used for `frame` (every 5th frame), `settle`, `retake`; `Capture` must also report dropped frames through `settle` with `dropped: true`.
 - `RemoteRecognizer.read` records `fetch` start, headers-received, and end; `serverMs` is parsed from the `Server-Timing` header (`model;dur=`, `total;dur=`), falling back to `Reading.ms`; `uploadMs = headersReceivedAt - start - serverTotalMs`.
 - `server/app.py` `/read` sets `Server-Timing: model;dur=<ms>, total;dur=<ms>` where `model` is the forward pass and `total` is request receipt to response.
-- HUD (`ui/hud.ts`), shown only with `?debug=1`: live `meanDiff` with the `stableDiff` line; the 8x8 energy heatmap with the `changeMin` value marked on its colour scale; the last three `decode` or `badframe` lines with tier, score, margin; last `totalMs`; a recording indicator (Task 3); a "Mark" button that pushes `{kind:'user', note:'mark'}`; a "Download log" button calling `toBlob()`.
+- HUD (`ui/hud.ts`), shown only with `?debug=1`: live `meanDiff` with the `stableDiff` line; the 8x8 energy heatmap with the `changeMin` value marked on its colour scale; the last three `decode` or `badframe` lines with tier, score, margin; last `totalMs`; a recording indicator (Task 5); a "Mark" button that pushes `{kind:'user', note:'mark'}`; a "Download log" button calling `toBlob()`.
 
 - [ ] **Step 1: Write the failing tests** `DebugLog keeps only the last 2000 events`, `drain returns only events pushed since the previous drain`, `toBlob is a JSON array in push order`.
 - [ ] **Step 2: Run** → FAIL. **Step 3: Implement `DebugLog`.** **Step 4: Run** → PASS.
@@ -159,7 +246,7 @@ export class DebugLog {
 
 ---
 
-### Task 3: Session recording (opt-in) on the server
+### Task 5: Session recording (opt-in) on the server
 
 **Files:**
 - Modify: `server/app.py`
@@ -168,7 +255,7 @@ export class DebugLog {
 - Test: `server/tests/test_recording.py`, `web/test/recognizer.test.ts`
 
 **Interfaces:**
-- Consumes: `DebugLog.drain()` (Task 2); existing `/read`.
+- Consumes: `DebugLog.drain()` (Task 4); existing `/read`.
 - Produces, server:
 ```python
 # server/recording.py
@@ -196,7 +283,7 @@ class SessionStore:
 
 ---
 
-### Task 4: Import a recorded session into the corpus layout
+### Task 6: Import a recorded session into the corpus layout
 
 **Files:**
 - Create: `eval/import_session.py`
@@ -204,7 +291,7 @@ class SessionStore:
 - Modify: `eval/corpus/README.md` (add the "record with the app" protocol as the preferred way)
 
 **Interfaces:**
-- Consumes: the session layout from Task 3; `make_corpus` conventions from `eval/make_corpus.py`.
+- Consumes: the session layout from Task 5; `make_corpus` conventions from `eval/make_corpus.py`.
 - Produces:
 ```python
 @dataclass
@@ -236,15 +323,16 @@ def import_session(session_dir: Path, out_dir: Path, model: str = "lite") -> Imp
 
 ---
 
-### Task 5: First measured session and the per-ply table
+### Task 7: First measured session and the per-ply table
 
 **Files:**
 - Modify: `eval/RESULTS.md`
 
 No code. This is the measurement the diagnosis brief asks for; it decides the next plan.
 
+- [ ] **Step 0: Camera-move test.** Mid-game, the owner picks the phone up, waves it, and puts it back on the tripod; then, in a second game, slides the tripod 10 cm. Expected in the log: `paused`, no `decode` with outcome `move` until `resumed`, and the tracked position unchanged. Any accepted move during either test is a blocking bug: stop and report.
 - [ ] **Step 1: Owner runs the protocol** from the brief, section 4: `?debug=1`, Record on, the ten-ply script `1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 5. O-O Be7`, "Mark" the moment each hand leaves, no lens covering, PGN confirmed at End session. Then once more with the players swapped.
 - [ ] **Step 2: Builder imports both sessions** with `import_session.py` into `eval/corpus/session-<id>/` and commits the report output.
-- [ ] **Step 3: Builder writes the per-ply table** into `eval/RESULTS.md` from `events.jsonl`: per ply, `mark t`, next `moving` t (or none), `settled` t, `maxEnergy`, dropped or read, `jpegBytes`, `uploadMs`, `serverMs`, `badframe` reasons if any, `retake` count, decode outcome and tier, and delay from mark to decode. Also the distribution of `meanDiff` during plain hand moves versus at rest, and of `maxEnergy` on plies that were read versus dropped.
+- [ ] **Step 3: Builder writes the per-ply table** into `eval/RESULTS.md` from `events.jsonl`: per ply, `mark t`, next `moving` t (or none), `settled` t, `maxEnergy`, dropped or read, `jpegBytes`, `uploadMs`, `serverMs`, `badframe` reasons if any, `retake` count, decode outcome, tier and `residual`, and delay from mark to decode. Also the distribution of `meanDiff` during plain hand moves versus at rest, and of `maxEnergy` on plies that were read versus dropped.
 - [ ] **Step 4: Builder states which hypotheses of the brief's section 9 the table confirms**, in two or three sentences under the table, and stops. The threshold changes and the speed work are the next plan, written from this table.
 - [ ] **Step 5: Commit** `docs(eval): first instrumented field session`

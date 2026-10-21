@@ -251,7 +251,7 @@ Where the owner's idea adds something real:
   the reading is a diagnostic. If the owner ever saw the *tracked* board lose
   a king, that is a real bug and must be reported with the log.
 - Readings that are impossible as a whole (no king, pieces appearing) are
-  now a frame-quality signal with a retake (Task 0 and 1 of the new plan),
+  now a frame-quality signal with a retake (Tasks 2 and 3 of the new plan),
   which is the owner's "guard" made concrete.
 - The one deliberate hole is the illegal tier. It exists because club
   players do make illegal moves. Its safety comes from the prior, the margin,
@@ -305,3 +305,63 @@ from a known side. An arm from the other side is an adjustment, a capture
 being cleared, or a takeback, and can lower the legal-move prior for that
 frame. This is an idea for the next plan, after Task 5's table shows what
 `meanDiff` and per-square energy do during a real hand move.
+
+## 11. Camera movement produced silent moves (owner, 2026-10-21 night)
+
+The missing king was not a recognition miss. The owner was moving the phone
+and the app accepted a sequence of moves on its own, one of which took a
+king or a queen off the board. This is the one failure the gate metric
+forbids (silently wrong plies = 0) and it outranks everything in this brief.
+
+**Why the design allows it.** The decoder's step order, as specified in the
+original plan: pick the best candidate `b`; if `b.score < acceptMin`, check
+how many squares of the reading disagree with the tracked board and go
+pending 'unexplained' when there are more than `disagreeMax`; otherwise, if
+the margin is wide enough, accept. The disagreement check runs only on the
+low-score branch. A reading of a shifted, rotated or re-cropped board
+disagrees with the tracked position on most squares, but a legal move that
+happens to match two of those wrong squares scores about +13 (two squares
+at `log(0.9 / 0.001)`), far above `acceptMin = 2.0`, and the runner-up is
+often far behind. The decoder scores only the squares a candidate changes
+and never asks whether the rest of the board still agrees. A sequence of
+such frames walks the position anywhere. The king cannot be removed by any
+tier, but the queen can be captured, and the king can be moved.
+
+**Why the safeguards did not catch it.**
+
+- The bump detector is a phase-correlation shift on a 64x64 crop with a
+  4 px threshold. Picking the phone up is rotation and scale, not a pure
+  shift, so the correlation confidence drops and nothing fires. Even when it
+  fires, the plan only says it opens a re-frame prompt; it does not say the
+  queue stops decoding.
+- The stability detector does its job: while the phone moves nothing
+  settles, and once it is still the next frame is read. That frame is a
+  different scene, and the decoder has no notion of "different scene".
+
+**The fix, in order of importance.**
+
+1. **Residual gate in the decoder.** After choosing the best candidate,
+   count the squares where the reading disagrees with the *candidate's*
+   board (not the tracked one). If more than `residualMax` disagree, the
+   frame is pending 'unexplained' whatever its score and margin. This closes
+   the hole for every cause: camera moves, a hand over half the board, a
+   wrong crop. It is a synthetic unit test, needs no corpus, and only makes
+   acceptance stricter. `residualMax` starts at 4 and is tuned on the
+   corpus; the per-frame residual goes into the debug log.
+2. **Camera movement pauses decoding until a resync.** Three signals say the
+   camera moved: the existing `bumped`, the phone's own motion sensors
+   (`devicemotion` is available in Chrome on Android without a prompt), and
+   two consecutive frames whose residual against the tracked board exceeds
+   a scene-change count. On any of them the queue drops frames and shows
+   "Camera moved". It resumes only after the sensors are quiet and one
+   settled frame agrees with the tracked position under the best of the
+   four rotations. If it does not agree, the re-frame prompt opens and
+   nothing is decoded until it does.
+3. **Recovery.** An always-visible "Undo last move" so the operator can
+   repair the game in a few taps when something does get through.
+
+These are Tasks 0 and 1 of the plan now; the instrumentation moved behind
+them. The builder must confirm the live step order in `decoder.ts` before
+Task 0 and quote it in `eval/RESULTS.md`; if the live code already gates on
+disagreement before accepting, the mechanism is different and the log from
+the next camera-move test decides.
