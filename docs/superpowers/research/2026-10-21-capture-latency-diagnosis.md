@@ -187,3 +187,45 @@ It does not change any threshold, and it does not start the twin work. The
 twin's visibility weighting is the likely answer to H5 if H5 turns out to
 hold, but it is a week of work and must not be started on a hunch while a
 0.06 constant may be the whole story.
+
+## 9. Update after the owner's second report (same day)
+
+New facts from the owner:
+
+- Covering and uncovering the lens after every ply records the moves one by
+  one. So the decoder accepts single plies at this angle, and the server
+  path returns usable readings.
+- Phone: Redmi Note 11 Pro, Chrome, Wi-Fi at 100 Mbps. A read triggered by
+  the cover takes 2 to 3 s to show.
+- A move made by an ordinary hand movement is not picked up at all.
+- In one frame the recognizer did not see a king.
+- No corpus games are recorded.
+
+What this does to the hypotheses:
+
+| # | Status | Why |
+|---|---|---|
+| H1 motion gate never opens | **Leading** | A normal hand move never produces a read; a cover always does. The cover is the only difference in stage A. |
+| H2 change gate drops the frame | Open | After the cover, the uncovered frame is compared with the same accepted reference as a normal move would be, so if the cover path passes stage C with the same two changed squares, a normal move should too. Unless the covered frame itself was read and became the reference. The log decides. |
+| H3 decode waits for the period to end | Refuted | Cover-per-ply gives one move per ply immediately. |
+| H4 upload or server dominates | Open, bounded | Round trip is 2 to 3 s on fast Wi-Fi; upload is small at that bandwidth, so the server is probably 1.5 to 2 s. Speed work goes there once `serverMs` is logged. |
+| H5 single plies pending, two-ply wins | Refuted | Same reason as H3. |
+
+The missing king is a separate finding and a useful one. The decoder can
+never remove a king (no candidate tier moves a piece off the board), so the
+state was safe, but the raw reading was wrong, which means that frame was
+bad: a hand, blur, or an occlusion. A reading-sanity check (both kings seen
+with probability at least 0.5 somewhere; expected piece total not above the
+tracked board's total) turns such a frame into a "bad frame" that is retaken
+after a second instead of counting toward a prompt. The same retake timer
+also covers the case where a pending frame would otherwise wait for the next
+hand motion that may never register.
+
+On data: nothing has been recorded, and the recording protocol in the
+original plan (one photo per ply, by hand) has not happened in four days
+because it is a chore. The replacement is to let the app record: with an
+opt-in toggle, the server keeps every crop the phone sends, the reading it
+returned, the client's event log, the "mark" taps, and the PGN the operator
+confirms at the end. That is exactly what the model sees, with timings, and
+it becomes the corpus through an import script. The plan is
+`docs/superpowers/plans/2026-10-21-field-instrumentation-and-recording.md`.

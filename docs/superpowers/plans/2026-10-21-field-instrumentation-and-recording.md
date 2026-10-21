@@ -1,0 +1,250 @@
+# Field Instrumentation and Session Recording Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Make every field session produce the evidence needed to tune the capture pipeline (what the model saw, what it answered, what the decoder did, and how long each stage took), and stop a bad frame from stranding the app until the next large motion.
+
+**Architecture:** A pure reading-sanity check (both kings visible, no pieces appearing from nowhere) runs before the decoder and turns a bad frame into a retake after one second instead of a pending count. A ring-buffer debug log and a HUD expose every capture gate live. With an opt-in toggle, the server keeps each crop it receives, the reading it returned, the client's event log, the operator's "mark" taps and the confirmed PGN under a session directory; an import script turns a recorded session into the existing corpus layout so `bench.ts` and `metrics.py` run unchanged.
+
+**Tech Stack:** Existing web app (vanilla TypeScript, Vite, vitest), existing FastAPI server (`server/app.py`), existing `eval/` Python 3.12 via uv with `python-chess`. No new runtime dependency.
+
+**Spec:** `docs/superpowers/research/2026-10-21-capture-latency-diagnosis.md` (sections 4, 5, 9) and the original design in `docs/superpowers/plans/2026-10-17-chess-camera.md` (Tasks 11 to 14, 17). If the live code names differ from the interfaces quoted below, use the live names and say so in the task's commit message.
+
+## Global Constraints
+
+- Node 22, TypeScript `strict: true`, no UI framework; Python 3.12 via `uv` in `eval/` and `server/`.
+- Square index `a1 = 0 ... h8 = 63`; canonical class order `empty, wP, wN, wB, wR, wQ, wK, bP, bN, bB, bR, bQ, bK`; probability floor `1e-3`.
+- No behaviour change to the capture thresholds (`stableDiff`, `stableMs`, `changeMin`, `shiftPx`, `maxFramesPerMove`) or the decoder thresholds in this plan. Measuring comes first.
+- Sanity constants: `kingMinP = 0.5`, `totalTolerance = 1` (argmax-occupied squares may exceed the tracked count by at most 1). Retake constants: `retakeMs = 1000`, `retakeMax = 3` per stable period. Debug log capacity `2000` events; `frame` events sampled every 5th video frame; event flush to the server every `30 s` and at session end.
+- Images are stored only when the operator turns on "Record this session" and the server holds a matching `CHESS_RECORD_KEY`. Storage root `CHESS_DATA_DIR`, default `server/data`. Recording stops silently when free space is under 1 GB. Nothing is stored on the phone.
+- No Tencent, DNS, or Google change in any task. Every measurement goes into `eval/RESULTS.md` with date, device, build hash, and command.
+
+## Review Focus
+
+1. A king hidden behind a taller piece from the camera's side, where the recognizer still puts 0.5 or more on the king class at that square. Expected: the frame passes sanity; no retake, no prompt. Test in Task 0.
+2. A capture, so the reading has one piece fewer than the tracked board. Expected: sanity passes, because pieces may vanish, never appear. Test in Task 0.
+3. The server is unreachable for one read mid-game. Expected: the queue logs the error, requests a retake, and decodes the next frame in order; the app never stalls. Test in Task 1.
+4. The recording toggle is on but the server key is missing or wrong. Expected: recognition works exactly as before, nothing is stored, and the HUD shows recording off. Test in Task 3.
+5. The operator taps "mark" fewer times than there are plies in the PGN. Expected: the importer labels nothing it cannot justify, reports the mismatch, and still writes the frames and readings. Test in Task 4.
+
+## Before Task 0
+
+Answer the eight factual questions in the brief's section 6 (deployed build hash, live threshold values, how the motion diff and `settled` work, when `decoder.step` runs, what the heatmap shows, what is uploaded and the model input size, server cores and ms per read, corpus state) in `eval/RESULTS.md` under a dated heading. Where a live value differs from this plan's assumptions, say so there and in the affected task's commit message.
+
+## Task dependency map
+
+- Task 0 → Task 1 (sanity feeds retake).
+- Task 2 is independent; Task 3 needs Task 2 (it uploads the log).
+- Task 4 needs Task 3's on-disk layout only.
+- Task 5 is the measurement run; needs Tasks 0 to 3 deployed.
+
+---
+
+### Task 0: Reading sanity check
+
+**Files:**
+- Create: `web/src/sanity.ts`
+- Modify: `web/src/queue.ts` (run the check before `decoder.step`)
+- Test: `web/test/sanity.test.ts`, `web/test/queue.test.ts`
+
+**Interfaces:**
+- Consumes: `LogProbs`, `Board`, `PieceClass` from `web/src/types.ts`; `synthReading` from `web/test/synth.ts`; `Decoder.state.board` from `web/src/decoder.ts`.
+- Produces:
+```ts
+export interface SanityConfig { kingMinP: number; totalTolerance: number }         // 0.5, 1
+export const DEFAULT_SANITY: SanityConfig;
+export type SanityReason = 'no-wK' | 'no-bK' | 'too-many-pieces';
+export interface Sanity { ok: boolean; reasons: SanityReason[]; kingP: { w: number; b: number }; expectedTotal: number; trackedTotal: number }
+export function checkReading(lp: LogProbs, board: Board, cfg?: SanityConfig): Sanity;
+// kingP.w = max over squares of exp(lp[s][wK]); 'no-wK' when below kingMinP; same for black.
+// expectedTotal = number of squares whose argmax class is not empty (counting argmax, not summed probability:
+// a 0.9-confidence reading spreads about 0.1 over the 12 piece classes on every empty square, which would sum to
+// three phantom pieces); trackedTotal = occupied squares of board;
+// 'too-many-pieces' when expectedTotal > trackedTotal + totalTolerance. Rotation-invariant by construction.
+// queue.ts: new outcome kind emitted to the app's outcome callback and the debug log:
+export type QueueOutcome = Outcome | { kind: 'badframe'; seq: number; sanity: Sanity; forced: boolean };   // forced: decoder was stepped anyway (Task 1)
+```
+
+- [ ] **Step 1: Write the failing tests** in `web/test/sanity.test.ts`:
+  - `passes on a clean start reading` (`synthReading(START_BOARD, 0.9)` → `ok` true, `reasons` empty, `kingP.w >= 0.9`).
+  - `flags no-wK when the white king probability is below 0.5 everywhere` (noise entry setting e1 to `{cls:'empty', p:0.6}` → `reasons` contains `'no-wK'`, `ok` false).
+  - `passes when the king is seen at exactly 0.5` (Review Focus 1: e1 `wK` at 0.5 → `ok` true).
+  - `passes after a capture` (Review Focus 2: board after exd5, reading with 31 pieces, tracked board with 32 → `ok` true).
+  - `tolerates one phantom piece` (START_BOARD tracked, reading puts `wP` 0.9 on e4 and keeps e2 → `ok` true).
+  - `flags too-many-pieces when two pieces appear from nowhere` (same with `wP` 0.9 on e4 and d4 → `reasons` contains `'too-many-pieces'`).
+- [ ] **Step 2: Run** `cd web && npx vitest run test/sanity.test.ts` → FAIL with "checkReading is not a function".
+- [ ] **Step 3: Implement `checkReading`** in `web/src/sanity.ts` as specified in the Interfaces block.
+- [ ] **Step 4: Run** → PASS.
+- [ ] **Step 5: Write the failing queue test** in `web/test/queue.test.ts`: `emits badframe and does not step the decoder on a reading with no white king` (FileRecognizer returning that reading; spy on `decoder.step`; the outcome callback receives `{kind:'badframe'}`; `decoder.pendingCount` unchanged).
+- [ ] **Step 6: Run** → FAIL. **Step 7: Implement** in `queue.ts`: after averaging and before `decoder.step`, call `checkReading(lp, decoder.state.board)`; on failure emit `badframe` and skip the step.
+- [ ] **Step 8: Run** `npx vitest run` → all PASS.
+- [ ] **Step 9: Commit** `feat(web): reading sanity check before the decoder`
+
+---
+
+### Task 1: Retake timer
+
+**Files:**
+- Modify: `web/src/capture.ts` (`CaptureConfig`, `Capture`, `StabilityDetector`), `web/src/queue.ts`
+- Test: `web/test/capture.test.ts`, `web/test/queue.test.ts`
+
+**Interfaces:**
+- Consumes: `QueueOutcome` from Task 0; `CaptureEvent`, `StableFrame` from `capture.ts`.
+- Produces:
+```ts
+// CaptureConfig additions
+retakeMs: number; retakeMax: number;            // 1000, 3
+// Capture addition
+requestRetake(): void;   // after retakeMs, if no 'moving' since the request, emits {kind:'stable', frame} from the current video frame with a fresh seq;
+                         // at most retakeMax retakes per stable period; further requests are ignored; a 'moving' event cancels a pending retake
+// CaptureEvent addition
+| { kind: 'retake'; n: number }                 // emitted when the retake fires, n = 1..retakeMax within the period
+```
+- `queue.ts` calls `capture.requestRetake()` when the outcome is `badframe` or `pending`, and when `recognizer.read` rejects (the rejection is logged, the frame is dropped, the next frame decodes in order).
+- Sanity must never stop decoding for good: `queue.ts` counts consecutive `badframe` outcomes; when the count reaches `retakeMax`, the next failing reading is passed to `decoder.step` anyway (the decoder cannot remove a king, so this is safe) and the outcome is emitted with `forced: true`. The counter resets on any `move` or `nochange`.
+
+- [ ] **Step 1: Write the failing tests** in `web/test/capture.test.ts` using the pure detector plus a fake clock (inject `now()` and `setTimeout` through the constructor if the live class does not already):
+  - `retake fires after retakeMs when the scene stays still`.
+  - `a moving event cancels a pending retake`.
+  - `at most retakeMax retakes per stable period, counter resets after the next settle`.
+- [ ] **Step 2: Run** → FAIL. **Step 3: Implement** in `capture.ts`.
+- [ ] **Step 4: Run** → PASS.
+- [ ] **Step 5: Write the failing queue tests**: `requests a retake on badframe`, `requests a retake on pending`, `a rejected read is logged, dropped, and the next frame still decodes in seq order` (Review Focus 3: FileRecognizer whose second promise rejects), `after retakeMax consecutive badframes the decoder is stepped and the outcome is forced` (four readings with no white king: `decoder.step` called once, on the fourth).
+- [ ] **Step 6: Run** → FAIL. **Step 7: Implement** in `queue.ts`. **Step 8: Run** `npx vitest run` → all PASS.
+- [ ] **Step 9: Commit** `feat(web): retake a frame after a bad or pending read`
+
+---
+
+### Task 2: Debug log, HUD, server timing
+
+**Files:**
+- Create: `web/src/debuglog.ts`, `web/src/ui/hud.ts`
+- Modify: `web/src/capture.ts` (emit per-frame diagnostics), `web/src/queue.ts`, `web/src/recognizer.ts` (`RemoteRecognizer` timing), `web/src/app.ts` (wire `?debug=1`)
+- Modify: `server/app.py` (`Server-Timing` header)
+- Test: `web/test/debuglog.test.ts`, `web/test/recognizer.test.ts`, `server/tests/test_app.py`
+
+**Interfaces:**
+- Consumes: `QueueOutcome`, `Sanity` (Task 0); `CaptureEvent` including `retake` (Task 1); `Reading.ms` from the contract.
+- Produces:
+```ts
+export type DebugEvent =
+  | { kind: 'frame';    t: number; meanDiff: number; state: 'moving' | 'stable' | 'settled' }
+  | { kind: 'settle';   t: number; seq: number; maxEnergy: number; energy: number[]; dropped: boolean }
+  | { kind: 'read';     t: number; seq: number; cropW: number; cropH: number; jpegBytes: number; uploadMs: number; serverMs: number; totalMs: number; error?: string }
+  | { kind: 'decode';   t: number; seq: number; outcome: 'move' | 'nochange' | 'pending' | 'ask'; tier?: Tier; score: number; margin: number; rotation: Rotation; pendingCount: number }
+  | { kind: 'badframe'; t: number; seq: number; reasons: SanityReason[]; kingP: { w: number; b: number }; forced: boolean }
+  | { kind: 'retake';   t: number; n: number }
+  | { kind: 'user';     t: number; note: string };
+export class DebugLog {
+  constructor(capacity?: number);                 // 2000
+  push(e: DebugEvent): void;
+  snapshot(): DebugEvent[];                       // everything retained, oldest first
+  drain(): DebugEvent[];                          // events pushed since the last drain (for upload), independent of eviction
+  toBlob(): Blob;                                 // JSON array of snapshot()
+}
+```
+- `t` is `performance.now()` plus a session epoch so events sort across reloads: `t = Date.now()` at push.
+- `Capture` gains a diagnostics callback `onDiag(cb: (e: DebugEvent) => void)` used for `frame` (every 5th frame), `settle`, `retake`; `Capture` must also report dropped frames through `settle` with `dropped: true`.
+- `RemoteRecognizer.read` records `fetch` start, headers-received, and end; `serverMs` is parsed from the `Server-Timing` header (`model;dur=`, `total;dur=`), falling back to `Reading.ms`; `uploadMs = headersReceivedAt - start - serverTotalMs`.
+- `server/app.py` `/read` sets `Server-Timing: model;dur=<ms>, total;dur=<ms>` where `model` is the forward pass and `total` is request receipt to response.
+- HUD (`ui/hud.ts`), shown only with `?debug=1`: live `meanDiff` with the `stableDiff` line; the 8x8 energy heatmap with the `changeMin` value marked on its colour scale; the last three `decode` or `badframe` lines with tier, score, margin; last `totalMs`; a recording indicator (Task 3); a "Mark" button that pushes `{kind:'user', note:'mark'}`; a "Download log" button calling `toBlob()`.
+
+- [ ] **Step 1: Write the failing tests** `DebugLog keeps only the last 2000 events`, `drain returns only events pushed since the previous drain`, `toBlob is a JSON array in push order`.
+- [ ] **Step 2: Run** → FAIL. **Step 3: Implement `DebugLog`.** **Step 4: Run** → PASS.
+- [ ] **Step 5: Write the failing recognizer test** `RemoteRecognizer reports serverMs from Server-Timing and uploadMs from the fetch timing` (mock `fetch` with a `Server-Timing` header and a fake clock).
+- [ ] **Step 6: Run** → FAIL. **Step 7: Implement** the timing in `RemoteRecognizer` and the `onDiag` emissions in `capture.ts` and `queue.ts`. **Step 8: Run** → PASS.
+- [ ] **Step 9: Server test** `read sets Server-Timing with model and total durations` (stub model). Run `cd server && uv run pytest -q` → FAIL, implement, → PASS.
+- [ ] **Step 10: Implement the HUD** (`ui/hud.ts`, no test) and wire `?debug=1` in `app.ts`. Manual check on the phone: the heatmap updates when a hand passes, the `meanDiff` value moves, "Download log" saves a file.
+- [ ] **Step 11: Commit** `feat: debug log, HUD and server timing`
+
+---
+
+### Task 3: Session recording (opt-in) on the server
+
+**Files:**
+- Modify: `server/app.py`
+- Create: `server/recording.py`
+- Modify: `web/src/recognizer.ts` (`RemoteRecognizer` headers), `web/src/app.ts` (session create, flush, end dialog), `web/src/ui/setup.ts` (toggle and key field)
+- Test: `server/tests/test_recording.py`, `web/test/recognizer.test.ts`
+
+**Interfaces:**
+- Consumes: `DebugLog.drain()` (Task 2); existing `/read`.
+- Produces, server:
+```python
+# server/recording.py
+class SessionStore:
+    def __init__(self, root: Path, record_key: str | None, min_free_bytes: int = 1 << 30): ...
+    def create(self, meta: dict, key: str | None) -> tuple[str, bool]:   # (session_id, recording); recording only when key == record_key and record_key is set
+    def save_read(self, session_id: str, seq: int, image: bytes, reading: dict) -> bool:  # frames/{seq:04d}.jpg, readings/{seq:04d}.json; False when not recording or low on space
+    def append_events(self, session_id: str, events: list[dict]) -> int:  # events.jsonl, returns count written
+    def save_pgn(self, session_id: str, pgn: str) -> None:                 # game.pgn
+```
+  Routes: `POST /sessions` (JSON `meta`, header `X-Record-Key`) → `{"id": str, "recording": bool}`; `POST /read` reads headers `X-Session`, `X-Seq` and, when the session is recording, calls `save_read`, setting response header `X-Recorded: 1|0`; `POST /sessions/{id}/events` (JSON array) → `{"written": int}`; `POST /sessions/{id}/pgn` (text/plain) → `204`. Session ids are `YYYYMMDD-HHMMSS-<6 random hex>`. Layout: `CHESS_DATA_DIR/sessions/<id>/{session.json, frames/, readings/, events.jsonl, game.pgn}`. `session.json` is the client's `meta` plus `created_at`, `recording`, `server_model`.
+- Produces, client: `RemoteRecognizer` constructor gains `opts?: { session?: () => string | null }` and sends `X-Session` and `X-Seq` (the `StableFrame.seq`) on each read; `app.ts` posts `/sessions` at session start with `meta = { ua, buildHash, captureConfig, decoderConfig, corners, cropRect, videoW, videoH, lensLabel, recognizer: 'remote' | 'onnx', startedAt }`; flushes `debugLog.drain()` to `/sessions/{id}/events` every 30 s and on "End session"; the end dialog shows the PGN from the move list in a textarea for correction and posts it to `/sessions/{id}/pgn`. Setup screen: toggle "Record this session for tuning (saves board crops on the owner's server only)", default off, and a "Recording key" field; both persist in `localStorage`. The "Mark" button from the HUD is also shown, large, at the bottom of the tracking screen whenever recording is on.
+
+- [ ] **Step 1: Write the failing server tests** with `TestClient` and a `tmp_path` root:
+  - `create with the right key records; read stores frame and reading under the session`.
+  - `create with a wrong key returns recording false and read stores nothing but still returns a Reading` (Review Focus 4).
+  - `create when CHESS_RECORD_KEY is unset never records`.
+  - `events append as JSONL and pgn is saved`.
+  - `save_read returns False and stores nothing when free space is below the floor` (monkeypatch `shutil.disk_usage`).
+- [ ] **Step 2: Run** `cd server && uv run pytest -q` → FAIL. **Step 3: Implement** `recording.py` and the routes. **Step 4: Run** → PASS.
+- [ ] **Step 5: Write the failing client test** `RemoteRecognizer sends X-Session and X-Seq when a session is set` (mock `fetch`, assert headers).
+- [ ] **Step 6: Run** → FAIL. **Step 7: Implement** the headers, the session create, the 30 s flush, the end dialog, the setup toggle and key field, and the recording indicator in the HUD. **Step 8: Run** `npx vitest run` → all PASS.
+- [ ] **Step 9: Deploy** to the dev server with `CHESS_RECORD_KEY` set to a value the owner chooses (handed over out of band, never committed) and `CHESS_DATA_DIR` on the data disk. Confirm one recorded session appears on disk with frames, readings, events and a PGN.
+- [ ] **Step 10: Commit** `feat: opt-in session recording on the server`
+
+---
+
+### Task 4: Import a recorded session into the corpus layout
+
+**Files:**
+- Create: `eval/import_session.py`
+- Test: `eval/tests/test_import_session.py`
+- Modify: `eval/corpus/README.md` (add the "record with the app" protocol as the preferred way)
+
+**Interfaces:**
+- Consumes: the session layout from Task 3; `make_corpus` conventions from `eval/make_corpus.py`.
+- Produces:
+```python
+@dataclass
+class ImportReport:
+    plies: int            # from game.pgn
+    marks: int            # 'user' events with note 'mark'
+    frames: int           # reads found
+    labelled: int         # frames given a ply index
+    unlabelled: int
+    warnings: list[str]
+
+def label_frames(reads: list[dict], marks: list[float], plies: int, slack_s: float = 2.0) -> list[int | None]:
+    # label = number of marks with mark_t <= read_t + slack_s; None when label > plies
+def import_session(session_dir: Path, out_dir: Path, model: str = "lite") -> ImportReport:
+    # writes out_dir/game.pgn, setup.json (from session.json), frames/NNNN.jpg + frames.jsonl ({seq, t, ply, outcome}),
+    # plies/NNN.jpg = the last frame labelled ply NNN, readings/<model>/NNN.json = the server reading for that frame;
+    # warns when marks != plies, when a ply has no frame, and when any frame is unlabelled.
+```
+  CLI: `uv run python import_session.py <session_dir> <out_dir> [--model lite] [--slack 2.0]`, prints the report.
+
+- [ ] **Step 1: Write the failing tests** with a synthetic session built in `tmp_path`:
+  - `labels frames by marks with slack` (reads at t = 0, 10.4, 20.4; marks at 11.5, 21.5; plies 2 → labels `[0, 1, 2]`).
+  - `a retake just before the next move keeps the earlier label` (read at 18.0, mark at 21.5 → label 1).
+  - `fewer marks than plies leaves later frames unlabelled and warns` (Review Focus 5: 1 mark, 2 plies → one warning naming the counts, last frames `None`).
+  - `writes the plies layout make_corpus would accept` (plies/000..002.jpg exist, readings/lite/000..002.json exist, frames.jsonl has one line per read).
+- [ ] **Step 2: Run** `cd eval && uv run pytest tests/test_import_session.py -q` → FAIL. **Step 3: Implement.** **Step 4: Run** → PASS.
+- [ ] **Step 5: Update `eval/corpus/README.md`**: the preferred protocol is now "turn on Record, tap Mark the moment each hand leaves the board, correct the PGN at End session, then run `import_session.py`"; the photo-per-ply protocol stays as the fallback.
+- [ ] **Step 6: Commit** `feat(eval): import recorded sessions into the corpus layout`
+
+---
+
+### Task 5: First measured session and the per-ply table
+
+**Files:**
+- Modify: `eval/RESULTS.md`
+
+No code. This is the measurement the diagnosis brief asks for; it decides the next plan.
+
+- [ ] **Step 1: Owner runs the protocol** from the brief, section 4: `?debug=1`, Record on, the ten-ply script `1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 5. O-O Be7`, "Mark" the moment each hand leaves, no lens covering, PGN confirmed at End session. Then once more with the players swapped.
+- [ ] **Step 2: Builder imports both sessions** with `import_session.py` into `eval/corpus/session-<id>/` and commits the report output.
+- [ ] **Step 3: Builder writes the per-ply table** into `eval/RESULTS.md` from `events.jsonl`: per ply, `mark t`, next `moving` t (or none), `settled` t, `maxEnergy`, dropped or read, `jpegBytes`, `uploadMs`, `serverMs`, `badframe` reasons if any, `retake` count, decode outcome and tier, and delay from mark to decode. Also the distribution of `meanDiff` during plain hand moves versus at rest, and of `maxEnergy` on plies that were read versus dropped.
+- [ ] **Step 4: Builder states which hypotheses of the brief's section 9 the table confirms**, in two or three sentences under the table, and stops. The threshold changes and the speed work are the next plan, written from this table.
+- [ ] **Step 5: Commit** `docs(eval): first instrumented field session`
