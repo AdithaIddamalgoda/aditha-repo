@@ -229,3 +229,79 @@ returned, the client's event log, the "mark" taps, and the PGN the operator
 confirms at the end. That is exactly what the model sees, with timings, and
 it becomes the corpus through an import script. The plan is
 `docs/superpowers/plans/2026-10-21-field-instrumentation-and-recording.md`.
+
+## 10. Owner's ideas on 2026-10-21 evening, with the planner's assessment
+
+**Idea 1: keep a digital model and reject readings that cannot follow from
+the last stable position; never let a reading overwrite the position.**
+
+This is the decoder's architecture already (original plan, "Decoder
+scoring"). The reading never becomes the position. The tracked position
+changes only when one candidate transition (no change, legal move, undo,
+two-ply, or, after a pending frame, an illegal move with prior -6) wins by
+`acceptMin` and `marginMin`. No tier can remove a king or add a piece. The
+reading is consulted only on the squares a candidate changes, so a wrong
+piece type on an unchanged square has no effect at all.
+
+Where the owner's idea adds something real:
+
+- The raw reading is still shown somewhere in the UI (the heatmap or an
+  overlay), and that is what showed a missing king. The tracked board and
+  the raw reading should be visibly different layers: the board is truth,
+  the reading is a diagnostic. If the owner ever saw the *tracked* board lose
+  a king, that is a real bug and must be reported with the log.
+- Readings that are impossible as a whole (no king, pieces appearing) are
+  now a frame-quality signal with a retake (Task 0 and 1 of the new plan),
+  which is the owner's "guard" made concrete.
+- The one deliberate hole is the illegal tier. It exists because club
+  players do make illegal moves. Its safety comes from the prior, the margin,
+  and from being offered only after a pending frame. Whether that is enough
+  is a corpus question (gate G2: silent errors 0).
+
+**Idea 2: castling direction was confused after the owner "moved
+orientation" before castling.**
+
+Not yet understood. A 180-degree rotation cannot swap castling sides (the
+decoder re-indexes the reading under each rotation, and kingside stays
+kingside). Three explanations fit, and the log plus one answer from the
+owner separate them:
+
+1. Castling was played king first, rook second, and a frame was read in
+   between. That frame shows only e1 and g1 changed, which no legal
+   candidate explains, so it is pending; if a second such frame arrives
+   before the rook moves, the illegal tier can accept Ke1-g1 as an illegal
+   king move and the real castling then has no legal explanation. Guard, if
+   confirmed: when the changed squares are a strict subset of a legal
+   castling's squares, stay pending and retake rather than offering the
+   illegal tier. This is a decoder rule and goes through the benchmark.
+2. The phone itself was turned or moved, so the corner homography and the
+   crop no longer matched the board. The capture should have emitted
+   `bumped`; if it did not, the shift detector threshold is the fault.
+3. Recognition noise on the rook squares at the board edge nearest or
+   farthest from the camera, which is the hardest region at 45 degrees.
+
+Question for the owner: what exactly did "moving orientation" mean (the
+phone, the board, or how the king was handled), and what did the app show:
+castling on the wrong side, a plain king move, or a prompt?
+
+**Idea 3: detect the arm coming in and going out, and use it to time the
+read.**
+
+Feasible, cheap, and it is the right shape for the fix to H1. The current
+trigger is a whole-frame mean difference, which an arm on the far side
+barely moves. Replace it with region motion: per-square energy against the
+previous frame on the board plus a border band around it. "Arm in" is a
+sustained motion region touching the band; "arm out" is that region gone
+with the board still. The read fires on arm out plus the existing settle,
+so a piece being adjusted after the hand leaves still waits. No hand or
+pose model is needed; frame differencing on the 128 x 128 crop does it.
+
+What anticipation buys: not much on the read itself, since the frame cannot
+be taken before the arm leaves. It does buy a warm server connection, the
+twin's pre-rendered masks for the legal replies, and a higher sampling rate
+for the detector during the move. One cheap extra: the side the arm comes
+from. Players sit left and right, so the arm of the player to move comes
+from a known side. An arm from the other side is an adjustment, a capture
+being cleared, or a takeback, and can lower the legal-move prior for that
+frame. This is an idea for the next plan, after Task 5's table shows what
+`meanDiff` and per-square energy do during a real hand move.
