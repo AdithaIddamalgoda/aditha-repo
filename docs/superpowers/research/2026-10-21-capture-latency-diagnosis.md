@@ -280,9 +280,11 @@ owner separate them:
 3. Recognition noise on the rook squares at the board edge nearest or
    farthest from the camera, which is the hardest region at 45 degrees.
 
-Question for the owner: what exactly did "moving orientation" mean (the
-phone, the board, or how the king was handled), and what did the app show:
-castling on the wrong side, a plain king move, or a prompt?
+Resolved (owner, same night): the castling confusion happened while the
+phone was being moved. It is the same failure as section 11, a shifted
+scene explained by a lucky legal move, and needs no separate investigation.
+Task 0's residual gate and Task 1's pause cover it; the camera-move test in
+Task 7 Step 0 is where it is confirmed fixed.
 
 **Idea 3: detect the arm coming in and going out, and use it to time the
 read.**
