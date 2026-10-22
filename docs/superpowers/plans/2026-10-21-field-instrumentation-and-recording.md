@@ -194,12 +194,14 @@ requestRetake(): void;   // after retakeMs, if no 'moving' since the request, em
 | { kind: 'retake'; n: number }                 // emitted when the retake fires, n = 1..retakeMax within the period
 ```
 - `queue.ts` calls `capture.requestRetake()` when the outcome is `badframe` or `pending`, and when `recognizer.read` rejects (the rejection is logged, the frame is dropped, the next frame decodes in order).
+- **Interim hand gate** (roadmap note 2026-10-22, section 4): on settle, if at least `occludedSquares = 8` entries of `StableFrame.energy` are at or above `occludedEnergy = 0.06`, `Capture` emits `{kind:'occluded', count}` instead of `stable`, does not read, and arms the retake. Measured on game 36: flags 36 of 39 hand frames and 0 of 40 clean frames. Replaced by the stage 4 classifier, never tuned by hand.
 - Sanity must never stop decoding for good: `queue.ts` counts consecutive `badframe` outcomes; when the count reaches `retakeMax`, the next failing reading is passed to `decoder.step` anyway (the decoder cannot remove a king, so this is safe) and the outcome is emitted with `forced: true`. The counter resets on any `move` or `nochange`.
 
 - [ ] **Step 1: Write the failing tests** in `web/test/capture.test.ts` using the pure detector plus a fake clock (inject `now()` and `setTimeout` through the constructor if the live class does not already):
   - `retake fires after retakeMs when the scene stays still`.
   - `a moving event cancels a pending retake`.
   - `at most retakeMax retakes per stable period, counter resets after the next settle`.
+  - `a settled frame with 8 squares at 0.07 is occluded and not read; with 7 it is stable` (interim hand gate).
 - [ ] **Step 2: Run** → FAIL. **Step 3: Implement** in `capture.ts`.
 - [ ] **Step 4: Run** → PASS.
 - [ ] **Step 5: Write the failing queue tests**: `requests a retake on badframe`, `requests a retake on pending`, `a rejected read is logged, dropped, and the next frame still decodes in seq order` (Review Focus 3: FileRecognizer whose second promise rejects), `after retakeMax consecutive badframes the decoder is stepped and the outcome is forced` (four readings with no white king: `decoder.step` called once, on the fourth).
@@ -232,6 +234,7 @@ export type DebugEvent =
   | { kind: 'answer';   t: number; what: 'candidate' | 'nothing' | 'manual' | 'undo'; move?: string }   // every fix-sheet and undo action, move in UCI
   | { kind: 'badframe'; t: number; seq: number; reasons: SanityReason[]; kingP: { w: number; b: number }; forced: boolean }
   | { kind: 'retake';   t: number; n: number }
+  | { kind: 'occluded'; t: number; seq: number; count: number }
   | { kind: 'user';     t: number; note: string };
 export class DebugLog {
   constructor(capacity?: number);                 // 2000
