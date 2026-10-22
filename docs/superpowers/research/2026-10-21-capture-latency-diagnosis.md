@@ -239,9 +239,13 @@ This is the decoder's architecture already (original plan, "Decoder
 scoring"). The reading never becomes the position. The tracked position
 changes only when one candidate transition (no change, legal move, undo,
 two-ply, or, after a pending frame, an illegal move with prior -6) wins by
-`acceptMin` and `marginMin`. No tier can remove a king or add a piece. The
-reading is consulted only on the squares a candidate changes, so a wrong
-piece type on an unchanged square has no effect at all.
+`acceptMin` and `marginMin`. No tier can remove a king or add a piece.
+Before Task 0 of the plan, the reading was consulted only on the squares a
+candidate changes, so a wrong piece type on an unchanged square had no
+effect at all; that is also the hole described in section 11. After Task 0
+(builder commit 0613ede), up to `residualMax = 4` such squares are tolerated
+and more than 4 make the frame pending. Task 7's residual column shows
+whether 4 is too strict in the field.
 
 Where the owner's idea adds something real:
 
@@ -320,7 +324,17 @@ original plan: pick the best candidate `b`; if `b.score < acceptMin`, check
 how many squares of the reading disagree with the tracked board and go
 pending 'unexplained' when there are more than `disagreeMax`; otherwise, if
 the margin is wide enough, accept. The disagreement check runs only on the
-low-score branch. A reading of a shifted, rotated or re-cropped board
+low-score branch.
+
+*Correction from the builder, 2026-10-22 (their commit 0461ff8, docs only):*
+the live code was looser still. `Decoder.step` had no disagreement check on
+any branch; the low-score branch only tested raw evidence against
+`unexplainedMin`, and `disagreeMax` was used by the start check alone. So
+the paragraph above describes the plan, not the code, and the hole was
+wider than written here. The fix below is unchanged by this: it adds the
+check on every branch.
+
+A reading of a shifted, rotated or re-cropped board
 disagrees with the tracked position on most squares, but a legal move that
 happens to match two of those wrong squares scores about +13 (two squares
 at `log(0.9 / 0.001)`), far above `acceptMin = 2.0`, and the runner-up is
@@ -367,3 +381,32 @@ them. The builder must confirm the live step order in `decoder.ts` before
 Task 0 and quote it in `eval/RESULTS.md`; if the live code already gates on
 disagreement before accepting, the mechanism is different and the log from
 the next camera-move test decides.
+
+## 12. Builder's report, 2026-10-22, and what `eval/RESULTS.md` adds
+
+- **Task 0 is done** (commit 0613ede): the residual against the candidate's
+  board is counted on every branch and more than 4 disagreeing squares make
+  the frame pending 'unexplained' whatever the score and margin. Task 1
+  (pause and resync) is next; the Undo button is in it.
+- **Two corrections to this brief**, both applied above: section 11 now
+  says the live code had no disagreement check at all, and section 10 no
+  longer claims an unchanged square can never matter.
+
+Facts from the owner's copy of `eval/RESULTS.md` (entries to 2026-10-20)
+that bear on response speed and on what to expect:
+
+| Fact | Where | Consequence |
+|---|---|---|
+| Model input is 644 x 644 RGB; normalisation is inside the graph | Task 4 export | The phone can crop to the board plus margin and resize to 644 before upload. A 644 px JPEG at quality 85 is roughly 80 to 150 KB, so upload stops mattering on any network. |
+| Native ORT CPU, 2 threads, on the 2 vCPU Lighthouse VM: 1.3 to 1.6 s per photo; PyTorch 1.0 to 1.15 s | Tasks 2, 4, board-detection Task 0 | The server read is near its floor on this box. The 2 to 3 s the owner sees is settle 0.4 s plus about 1.3 s of model plus overheads. Under 2 s needs a faster box or skipping the recognizer when the twin's silhouette term alone is confident (already in the design). |
+| Dynamic int8 fails parity (max prob diff 0.56 to 0.77) and is not faster | Task 4 | Quantisation is not a speed lever here. Do not spend time on it. |
+| The browser WASM path takes 5.3 s per read on the server CPU | Task 4 | Confirms server-by-default. |
+| Board-detection plan Tasks 0 to 7 are built: centroids (decoder layer 2 and 3, head 4 carry the geometry), grid fit, tap-free start with nudge handles, camera pose, twin, scorer terms, bench modes, dataset adapter | 2026-10-19 and 10-20 entries | Every gate G4, G5, G6 is NOT DECIDED for one reason only: no corpus. Session recording (plan Task 5) is therefore the critical path for the whole project, not just for the trigger thresholds. |
+| The headless `bump` test shows the app saying "The camera moved", holding the position, and resuming after re-tapping the corners | Task 14 e2e | A pause path already exists for `bumped`. Task 1 should extend it to the sensor and scene causes and add the agreement check before resuming, not build a second one. |
+| The dev VM currently answers as the LIVE API on port 8100 | board-detection Task 2 e2e | Production is still on the dev VM. The new Lighthouse box from the design spec has not happened; recording data will land on this VM's disk. |
+
+What this means for the owner's speed goal: the trigger failure (a move not
+picked up until the lens is covered) is the real latency problem and is
+worth minutes per game; the model read is worth at most a second and is
+near the floor of the current hardware. Fix the trigger first, measure,
+then decide whether a faster box is worth its cost.
