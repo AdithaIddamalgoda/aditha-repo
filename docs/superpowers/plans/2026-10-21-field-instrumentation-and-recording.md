@@ -109,6 +109,10 @@ pause(cause: 'bumped' | 'sensor' | 'scene'): void;   // drops every frame until 
 //   ok -> decoder.rotation = result.rotation, capture.markAccepted(frame), state 'tracking', emit {kind:'resumed', residual, rotation}
 //   not ok -> emit {kind:'reframe', residual}; stay paused
 // scene rule: two consecutive 'tracking' outcomes with residual > sceneChangeResidual (12) -> pause('scene')
+// rotation rule (research note 2026-10-22, section 3): when a 'tracking' outcome is pending 'unexplained' under the current rotation,
+//   run decoder.check(lp); if it is ok at another rotation, set decoder.rotation to it, emit {kind:'rotated', from, to, residual},
+//   and treat the frame as nochange (markAccepted). A pause's resync and the bump refit call the same path.
+// undo: the operator's "Undo last move" walks decoder.state.history to any depth; it is not limited by the undo1/undo2 tiers.
 ```
 - `app.ts`: `bumped` → `queue.pause('bumped')`; `camera-moved` → `queue.pause('sensor')`; banner "Camera moved. Keep it still." while paused; `reframe` opens the existing re-frame prompt (corner taps today, the nudge UI once the board-detection plan lands). An "Undo last move" button is always visible on the tracking screen and calls the same undo path the fix sheet's "undo last" uses; each tap undoes one more ply.
 
@@ -119,6 +123,8 @@ pause(cause: 'bumped' | 'sensor' | 'scene'): void;   // drops every frame until 
   - `resumes only after a frame passes check, and adopts its rotation` (FileRecognizer: one disagreeing reading, then one rotated-180 agreeing reading → `reframe` then `resumed` with `rotation` 2; `decoder.step` not called for either).
   - `two consecutive high-residual frames pause the queue with cause scene` (Review Focus 0: two readings of a shifted board → `paused`, no `move`).
   - `a bumped event pauses before the next frame is decoded`.
+  - `a reading rotated 180 degrees mid-game switches the rotation and commits nothing` (state after 1. e4 e5; reading = that board rotated 180 → outcome `rotated` with `to` 2, `decoder.step` history unchanged; the next reading at rotation 2 with 2. Nf3 → `move`).
+  - `undo walks back five plies` (five accepted moves, five undo calls → start position).
 - [ ] **Step 6: Run** → FAIL. **Step 7: Implement** in `queue.ts` and wire `app.ts`, the banner, and the Undo button. **Step 8: Run** `npx vitest run` → all PASS.
 - [ ] **Step 9: Phone check**: pick the phone up mid-game and put it back; the banner shows, no move appears, tracking resumes without a prompt when the framing is the same. Slide the tripod 10 cm: the re-frame prompt opens. Record both in `eval/RESULTS.md`.
 - [ ] **Step 10: Commit** `feat(web): camera movement pauses decoding until the board agrees again`
@@ -216,9 +222,12 @@ export type DebugEvent =
   | { kind: 'frame';    t: number; meanDiff: number; state: 'moving' | 'stable' | 'settled' }
   | { kind: 'settle';   t: number; seq: number; maxEnergy: number; energy: number[]; dropped: boolean }
   | { kind: 'read';     t: number; seq: number; cropW: number; cropH: number; jpegBytes: number; uploadMs: number; serverMs: number; totalMs: number; error?: string }
-  | { kind: 'decode';   t: number; seq: number; outcome: 'move' | 'nochange' | 'pending' | 'ask'; tier?: Tier; score: number; margin: number; residual: number; rotation: Rotation; pendingCount: number }
+  | { kind: 'decode';   t: number; seq: number; outcome: 'move' | 'nochange' | 'pending' | 'ask'; move?: string; tier?: Tier; score: number; margin: number; residual: number; rotation: Rotation; pendingCount: number }   // move in UCI when outcome is 'move'
   | { kind: 'paused';   t: number; cause: 'bumped' | 'sensor' | 'scene' }
   | { kind: 'resumed';  t: number; residual: number; rotation: Rotation }
+  | { kind: 'rotated';  t: number; from: Rotation; to: Rotation; residual: number }
+  | { kind: 'phase';    t: number; phase: 'finding' | 'tracking' | 'paused' | 'asking' | 'lost' }
+  | { kind: 'answer';   t: number; what: 'candidate' | 'nothing' | 'manual' | 'undo'; move?: string }   // every fix-sheet and undo action, move in UCI
   | { kind: 'badframe'; t: number; seq: number; reasons: SanityReason[]; kingP: { w: number; b: number }; forced: boolean }
   | { kind: 'retake';   t: number; n: number }
   | { kind: 'user';     t: number; note: string };
@@ -231,6 +240,7 @@ export class DebugLog {
 }
 ```
 - `t` is `performance.now()` plus a session epoch so events sort across reloads: `t = Date.now()` at push.
+- `meta.buildHash` must be a clean commit hash; the app refuses to start a *recording* session from a `-dirty` build and says so in the HUD.
 - `Capture` gains a diagnostics callback `onDiag(cb: (e: DebugEvent) => void)` used for `frame` (every 5th frame), `settle`, `retake`; `Capture` must also report dropped frames through `settle` with `dropped: true`.
 - `RemoteRecognizer.read` records `fetch` start, headers-received, and end; `serverMs` is parsed from the `Server-Timing` header (`model;dur=`, `total;dur=`), falling back to `Reading.ms`; `uploadMs = headersReceivedAt - start - serverTotalMs`.
 - `server/app.py` `/read` sets `Server-Timing: model;dur=<ms>, total;dur=<ms>` where `model` is the forward pass and `total` is request receipt to response.
