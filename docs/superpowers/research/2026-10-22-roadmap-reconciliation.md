@@ -115,3 +115,45 @@ projected area, as the state-aware note says, not at a flat 0.06.
    remote is one disk failure from gone.
 3. Builder: add the interim hand gate to Task 3 as specified in section 4,
    and confirm whether the deployed build now includes Tasks 0 to 3.
+
+## 7. Update, 2026-10-22 evening: builder status and two facts from RESULTS.md
+
+Builder: section C applied in the design; the interim hand gate built and
+tested, with a release timeout so an occluded board cannot deadlock the
+capture; deployed build 23b7bc4; the branch now has a GitHub remote.
+
+From the results file (the entries up to "what the phone uploads"; the
+game 36 tables and the sessions 2 to 4 entries were not in the copy the
+planner received):
+
+1. **The phone already uploads a 644 x 644 crop of about 95 KB**, not a
+   full still. Upload is not a lever. But the crop is the board's bounding
+   rectangle plus 10% margin **squashed** to a square, aspect ratio not
+   kept. At the owner's side-on view the board's bounding box is much wider
+   than tall, so the squash stretches pieces vertically by a large factor
+   on every frame the model sees. The model was not trained on
+   anisotropically stretched boards. This is a plausible, untested cause of
+   confident wrong readings on individual squares. **Check before
+   changing:** on the server, read the example photo and ten recorded
+   crops' source frames two ways, squashed and letterboxed (pad to square
+   with a neutral border, board centred), and compare per-square maximum
+   probability and argmax agreement. If letterboxing is better, the client
+   pads instead of squashing; the twin's crop-to-image mapping already
+   carries whatever transform is used. One hour, no deploy.
+2. **The server is ORT on CPU, 1.2 to 1.4 s warm, 13 s for the first read
+   after idle** because the session is created lazily inside the first
+   request. At a club evening the first move of the night, and the first
+   after any idle gap long enough for the service to restart or unload,
+   costs 13 s. Fix: create the inference session at process start, keep it
+   for the life of the process, log a `cold: true` flag on any read that
+   had to create it, and have the client send one warm-up read at session
+   start. Added to the plan's Task 4.
+
+Shift experiment on the unchanged decoder: 12 of 80 position-and-shift
+pairs were accepted as moves. That is the quantitative form of section 11
+of the brief; Task 0 closes it.
+
+The 2.3 s per read measured on 2026-10-22 01:17 over public HTTPS against
+1.3 s on loopback today is unexplained. The debug log's `uploadMs` and
+`serverMs` split (Task 4) settles it on the phone; until then no claim
+about the network.

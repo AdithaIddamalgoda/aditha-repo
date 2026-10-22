@@ -249,13 +249,14 @@ export class DebugLog {
 - `Capture` gains a diagnostics callback `onDiag(cb: (e: DebugEvent) => void)` used for `frame` (every 5th frame), `settle`, `retake`; `Capture` must also report dropped frames through `settle` with `dropped: true`.
 - `RemoteRecognizer.read` records `fetch` start, headers-received, and end; `serverMs` is parsed from the `Server-Timing` header (`model;dur=`, `total;dur=`), falling back to `Reading.ms`; `uploadMs = headersReceivedAt - start - serverTotalMs`.
 - `server/app.py` `/read` sets `Server-Timing: model;dur=<ms>, total;dur=<ms>` where `model` is the forward pass and `total` is request receipt to response.
+- `server/app.py` creates the ORT inference session at process start (never lazily in a request), keeps it for the life of the process, and adds `cold;desc=1` to `Server-Timing` on any read that still had to create it (RESULTS 2026-10-22: 13 s first read after idle). The client sends one warm-up read of a blank 644 x 644 JPEG when a session starts and logs it as `read` with `warmup: true`.
 - HUD (`ui/hud.ts`), shown only with `?debug=1`: live `meanDiff` with the `stableDiff` line; the 8x8 energy heatmap with the `changeMin` value marked on its colour scale; the last three `decode` or `badframe` lines with tier, score, margin; last `totalMs`; a recording indicator (Task 5); a "Mark" button that pushes `{kind:'user', note:'mark'}`; a "Download log" button calling `toBlob()`.
 
 - [ ] **Step 1: Write the failing tests** `DebugLog keeps only the last 2000 events`, `drain returns only events pushed since the previous drain`, `toBlob is a JSON array in push order`.
 - [ ] **Step 2: Run** → FAIL. **Step 3: Implement `DebugLog`.** **Step 4: Run** → PASS.
 - [ ] **Step 5: Write the failing recognizer test** `RemoteRecognizer reports serverMs from Server-Timing and uploadMs from the fetch timing` (mock `fetch` with a `Server-Timing` header and a fake clock).
 - [ ] **Step 6: Run** → FAIL. **Step 7: Implement** the timing in `RemoteRecognizer` and the `onDiag` emissions in `capture.ts` and `queue.ts`. **Step 8: Run** → PASS.
-- [ ] **Step 9: Server test** `read sets Server-Timing with model and total durations` (stub model). Run `cd server && uv run pytest -q` → FAIL, implement, → PASS.
+- [ ] **Step 9: Server tests** `read sets Server-Timing with model and total durations` and `the inference session exists before the first request` (stub model; assert the loader ran at app start, not in the handler). Run `cd server && uv run pytest -q` → FAIL, implement, → PASS.
 - [ ] **Step 10: Implement the HUD** (`ui/hud.ts`, no test) and wire `?debug=1` in `app.ts`. Manual check on the phone: the heatmap updates when a hand passes, the `meanDiff` value moves, "Download log" saves a file.
 - [ ] **Step 11: Commit** `feat: debug log, HUD and server timing`
 
@@ -345,6 +346,7 @@ def import_session(session_dir: Path, out_dir: Path, model: str = "lite") -> Imp
 
 No code. This is the measurement the diagnosis brief asks for; it decides the next plan.
 
+- [ ] **Step 00: Squash versus letterbox.** On the server, read the example photo and ten source frames of recorded crops both squashed to 644 x 644 (as the client does today) and letterboxed (padded to square, board centred); table per-square max probability and argmax agreement between the two in `eval/RESULTS.md`. If letterboxing is better, the client change is the next plan's first item.
 - [ ] **Step 0: Camera-move test.** Mid-game, the owner picks the phone up, waves it, and puts it back on the tripod; then, in a second game, slides the tripod 10 cm. Expected in the log: `paused`, no `decode` with outcome `move` until `resumed`, and the tracked position unchanged. Any accepted move during either test is a blocking bug: stop and report.
 - [ ] **Step 1: Owner runs the protocol** from the brief, section 4: `?debug=1`, Record on, the ten-ply script `1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 5. O-O Be7`, "Mark" the moment each hand leaves, no lens covering, PGN confirmed at End session. Then once more with the players swapped.
 - [ ] **Step 2: Builder imports both sessions** with `import_session.py` into `eval/corpus/session-<id>/` and commits the report output.
