@@ -96,6 +96,8 @@ export interface MotionSample { t: number; rot: number; accel: number }         
 export class MotionClassifier {            // pure
   constructor(cfg: MotionConfig);
   push(s: MotionSample): 'moving' | 'still' | 'settled';   // 'settled' once, after quietMs below both thresholds following a 'moving'
+  // 'moving' needs sustained motion: at least 3 consecutive samples above a threshold spanning >= 300 ms; a single spike (a tap on the
+  // clamped phone) is 'still'. MotionSensor also ignores samples for 500 ms after any touchstart/pointerdown on the page.
 }
 export class MotionSensor {               // wraps window 'devicemotion'; no-op when the event or its fields are unavailable
   constructor(cfg?: MotionConfig);
@@ -116,7 +118,7 @@ pause(cause: 'bumped' | 'sensor' | 'scene'): void;   // drops every frame until 
 ```
 - `app.ts`: `bumped` → `queue.pause('bumped')`; `camera-moved` → `queue.pause('sensor')`; banner "Camera moved. Keep it still." while paused; `reframe` opens the existing re-frame prompt (corner taps today, the nudge UI once the board-detection plan lands). An "Undo last move" button is always visible on the tracking screen and calls the same undo path the fix sheet's "undo last" uses; each tap undoes one more ply.
 
-- [ ] **Step 1: Write the failing tests** in `web/test/motion.test.ts`: `a rotation burst then quiet yields moving then settled after quietMs`, `samples below both thresholds never yield moving`, `acceleration alone above accelMs2 yields moving`.
+- [ ] **Step 1: Write the failing tests** in `web/test/motion.test.ts`: `a rotation burst then quiet yields moving then settled after quietMs`, `samples below both thresholds never yield moving`, `acceleration alone above accelMs2 yields moving`, `a single 80 ms spike is still, not moving` (review 2026-10-22, A2: a Mark tap must not pause decoding), `samples within 500 ms of a touch are ignored` (MotionSensor with an injected touch timestamp).
 - [ ] **Step 2: Run** → FAIL. **Step 3: Implement `MotionClassifier` and `MotionSensor`.** **Step 4: Run** → PASS.
 - [ ] **Step 5: Write the failing queue tests**:
   - `paused queue drops frames and steps nothing` (spy on `decoder.step`).
